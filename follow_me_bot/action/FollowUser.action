@@ -1,0 +1,9 @@
+# Goal
+string user_id
+geometry_msgs/PoseStamped user_pose
+---
+# Result
+string final_status
+---
+# Feedback
+float32 current_distance

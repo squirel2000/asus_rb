@@ -1,87 +1,97 @@
 import rclpy
 from rclpy.node import Node
+from rclpy.action import ActionServer
 from geometry_msgs.msg import PoseStamped, Twist
 from std_msgs.msg import String
 import math
+from follow_me_bot.action import FollowUser
 
 class UserTrackingControllerNode(Node):
     """
-    This node controls the robot's motion to follow a user.
-    It subscribes to a target pose, calculates the necessary velocity commands,
-    and publishes them. It also reports its status.
+    This node controls the robot's motion to follow a user using an action server.
+    It receives a goal to follow a user, calculates velocity commands,
+    and provides feedback on the distance.
     """
     def __init__(self):
         super().__init__('user_tracking_controller_node')
         self.get_logger().info('User Tracking Controller Node has been started.')
 
         # Parameters
-        self.declare_parameter('target_pose_topic', '/motion_controller/target_pose')
         self.declare_parameter('cmd_vel_topic', '/cmd_vel')
-        self.declare_parameter('status_topic', '/motion_controller/status')
-        self.declare_parameter('target_distance', 1.0)  # meters
+        self.declare_parameter('target_distance', 1.0)
         self.declare_parameter('linear_speed_factor', 0.5)
         self.declare_parameter('angular_speed_factor', 1.0)
-
-        # Subscribers
-        target_pose_topic = self.get_parameter('target_pose_topic').get_parameter_value().string_value
-        self.target_pose_subscription = self.create_subscription(
-            PoseStamped,
-            target_pose_topic,
-            self.pose_callback,
-            10)
 
         # Publishers
         cmd_vel_topic = self.get_parameter('cmd_vel_topic').get_parameter_value().string_value
         self.cmd_vel_publisher = self.create_publisher(Twist, cmd_vel_topic, 10)
-        
-        status_topic = self.get_parameter('status_topic').get_parameter_value().string_value
-        self.status_publisher = self.create_publisher(String, status_topic, 10)
 
-    def pose_callback(self, msg):
+        # Action Server
+        self._action_server = ActionServer(
+            self,
+            FollowUser,
+            'follow_user',
+            self.execute_callback)
+
+    def execute_callback(self, goal_handle):
         """
-        Callback function to process the target pose and control the robot.
+        Execute the follow user action.
         """
+        self.get_logger().info(f'Executing goal for user: {goal_handle.request.user_id}')
+
         target_distance = self.get_parameter('target_distance').get_parameter_value().double_value
         linear_speed_factor = self.get_parameter('linear_speed_factor').get_parameter_value().double_value
         angular_speed_factor = self.get_parameter('angular_speed_factor').get_parameter_value().double_value
 
-        # Extract the position from the pose
-        position = msg.pose.position
+        feedback_msg = FollowUser.Feedback()
         
-        # Calculate the error in distance and angle
-        distance_error = math.sqrt(position.x**2 + position.y**2) - target_distance
-        angle_error = math.atan2(position.y, position.x)
+        # Main control loop
+        while rclpy.ok():
+            if not goal_handle.is_active:
+                self.get_logger().info('Goal aborted')
+                return FollowUser.Result(final_status='Goal aborted')
 
-        # --- Simple Proportional Controller ---
-        # This is a basic controller. You might want to implement a more
-        # sophisticated one (e.g., PID controller) for smoother motion.
-        
-        twist_msg = Twist()
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+                self.get_logger().info('Goal canceled')
+                return FollowUser.Result(final_status='Goal canceled')
 
-        # Set linear velocity
-        twist_msg.linear.x = linear_speed_factor * distance_error
-        # Clamp linear velocity to a reasonable range
-        twist_msg.linear.x = max(-0.5, min(0.5, twist_msg.linear.x))
+            # Get the latest pose from the goal request
+            # In a real scenario, you might need a more dynamic way to get pose updates
+            position = goal_handle.request.user_pose.pose.position
+            
+            # Calculate errors
+            distance_error = math.sqrt(position.x**2 + position.y**2) - target_distance
+            angle_error = math.atan2(position.y, position.x)
 
-        # Set angular velocity
-        twist_msg.angular.z = angular_speed_factor * angle_error
-        # Clamp angular velocity
-        twist_msg.angular.z = max(-1.0, min(1.0, twist_msg.angular.z))
+            # --- Proportional Controller ---
+            twist_msg = Twist()
+            twist_msg.linear.x = linear_speed_factor * distance_error
+            twist_msg.linear.x = max(-0.5, min(0.5, twist_msg.linear.x))
+            twist_msg.angular.z = angular_speed_factor * angle_error
+            twist_msg.angular.z = max(-1.0, min(1.0, twist_msg.angular.z))
 
-        # Stop if the target is very close
-        if abs(distance_error) < 0.1:
-            twist_msg.linear.x = 0.0
-        
-        # Stop turning if the angle is small enough
-        if abs(angle_error) < 0.1:
-            twist_msg.angular.z = 0.0
+            if abs(distance_error) < 0.1:
+                twist_msg.linear.x = 0.0
+            if abs(angle_error) < 0.1:
+                twist_msg.angular.z = 0.0
 
-        self.cmd_vel_publisher.publish(twist_msg)
-        
-        # Publish status
-        status_msg = String()
-        status_msg.data = f"Following user. Distance error: {distance_error:.2f}m, Angle error: {angle_error:.2f}rad"
-        self.status_publisher.publish(status_msg)
+            self.cmd_vel_publisher.publish(twist_msg)
+
+            # Publish feedback
+            feedback_msg.current_distance = math.sqrt(position.x**2 + position.y**2)
+            goal_handle.publish_feedback(feedback_msg)
+
+            # Check if goal is reached
+            if abs(distance_error) < 0.1 and abs(angle_error) < 0.1:
+                break
+
+            rclpy.spin_once(self, timeout_sec=0.1)
+
+        goal_handle.succeed()
+        result = FollowUser.Result()
+        result.final_status = 'Successfully reached the target distance.'
+        return result
 
 
 def main(args=None):

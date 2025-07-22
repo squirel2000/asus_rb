@@ -1,14 +1,13 @@
 import rclpy
 from rclpy.node import Node
+from rclpy.action import ActionClient
 from geometry_msgs.msg import PoseStamped
-from std_msgs.msg import String
+from follow_me_bot.action import FollowUser
 
 class BehaviorCoordinatorNode(Node):
     """
-    This node coordinates the overall behavior of the user-following feature.
-    It subscribes to the raw pose from the visual tracker, processes it,
-    and forwards it to the motion controller. It also monitors the system's
-    status and can take high-level actions.
+    This node coordinates the user-following behavior by acting as an action client.
+    It subscribes to the user's pose and sends a goal to the action server.
     """
     def __init__(self):
         super().__init__('behavior_coordinator_node')
@@ -16,8 +15,9 @@ class BehaviorCoordinatorNode(Node):
 
         # Parameters
         self.declare_parameter('raw_pose_topic', '/user_tracker/target_pose')
-        self.declare_parameter('processed_pose_topic', '/motion_controller/target_pose')
-        self.declare_parameter('status_topic', '/motion_controller/status')
+
+        # Action Client
+        self._action_client = ActionClient(self, FollowUser, 'follow_user')
 
         # Subscribers
         raw_pose_topic = self.get_parameter('raw_pose_topic').get_parameter_value().string_value
@@ -27,49 +27,50 @@ class BehaviorCoordinatorNode(Node):
             self.raw_pose_callback,
             10)
         
-        status_topic = self.get_parameter('status_topic').get_parameter_value().string_value
-        self.status_subscription = self.create_subscription(
-            String,
-            status_topic,
-            self.status_callback,
-            10)
-
-        # Publisher for the processed pose
-        processed_pose_topic = self.get_parameter('processed_pose_topic').get_parameter_value().string_value
-        self.processed_pose_publisher = self.create_publisher(PoseStamped, processed_pose_topic, 10)
+        self.goal_handle = None
 
     def raw_pose_callback(self, msg):
         """
-        Callback for the raw pose from the visual tracker.
-        This is where you can filter, smooth, or regulate the pose data
-        before sending it to the motion controller.
+        Callback for the raw pose. Sends a goal to the action server.
         """
-        # --- Placeholder for pose processing ---
-        # For now, we will just forward the pose directly.
-        # You could add logic here like:
-        # - A low-pass filter to smooth the pose data.
-        # - Sanity checks (e.g., is the pose realistic?).
-        # - State-based logic (e.g., if the robot is stuck, stop sending poses).
-        
-        processed_pose = msg  # No processing for now
-        self.processed_pose_publisher.publish(processed_pose)
+        if not self._action_client.wait_for_server(timeout_sec=1.0):
+            self.get_logger().info('Action server not available, waiting...')
+            return
 
-    def status_callback(self, msg):
-        """
-        Callback for status messages from other nodes (e.g., motion controller).
-        This is where you can implement high-level error handling and recovery.
-        """
-        self.get_logger().info(f'Received status: "{msg.data}"')
+        # If we already have a goal, do nothing
+        if self.goal_handle is not None and self.goal_handle.is_active:
+            self.get_logger().info('Action is still active, not sending new goal.')
+            return
+
+        goal_msg = FollowUser.Goal()
+        goal_msg.user_id = "user_1"  # Placeholder
+        goal_msg.user_pose = msg
+
+        self.get_logger().info('Sending goal to action server...')
+        send_goal_future = self._action_client.send_goal_async(
+            goal_msg,
+            feedback_callback=self.feedback_callback)
         
-        # --- Placeholder for high-level actions ---
-        # Example: If the motion controller reports an error, you could:
-        # - Stop the robot.
-        # - Send a notification (e.g., via an MCP message).
-        # - Attempt a recovery behavior.
-        if "error" in msg.data.lower() or "stuck" in msg.data.lower():
-            self.get_logger().error("An error or warning was reported by the motion controller!")
-            # Here you would add logic to handle the error, e.g.,
-            # self.send_mcp_alert("Robot may be stuck!")
+        send_goal_future.add_done_callback(self.goal_response_callback)
+
+    def goal_response_callback(self, future):
+        self.goal_handle = future.result()
+        if not self.goal_handle.accepted:
+            self.get_logger().info('Goal rejected :(')
+            return
+
+        self.get_logger().info('Goal accepted :)')
+
+        get_result_future = self.goal_handle.get_result_async()
+        get_result_future.add_done_callback(self.get_result_callback)
+
+    def get_result_callback(self, future):
+        result = future.result().result
+        self.get_logger().info(f'Result: {result.final_status}')
+        self.goal_handle = None
+
+    def feedback_callback(self, feedback_msg):
+        self.get_logger().info(f'Received feedback: Distance = {feedback_msg.feedback.current_distance:.2f}m')
 
 
 def main(args=None):
