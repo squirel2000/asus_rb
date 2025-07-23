@@ -3,7 +3,7 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     """
-    Generates the launch description for the follow-me-bot project.
+    Generates the launch description for the follow-user project.
     This launch file starts all the necessary nodes for the user following feature.
     """
     return LaunchDescription([

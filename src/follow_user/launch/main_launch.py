@@ -7,7 +7,7 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     """
-    This is the main launch file for the follow-me-bot project.
+    This is the main launch file for the follow-user project.
     It launches the following:
     1. The TurtleBot3 Gazebo simulation with the Waffle model in the TurtleBot3 house world.
     2. RViz with a configuration for TurtleBot3.
