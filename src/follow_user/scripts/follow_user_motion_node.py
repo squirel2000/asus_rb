@@ -5,17 +5,17 @@ from rclpy.action import ActionServer
 from geometry_msgs.msg import PoseStamped, Twist
 from std_msgs.msg import String
 import math
-from follow_me_bot.action import FollowUser
+from follow_user.action import FollowUser
 
-class UserTrackingControllerNode(Node):
+class FollowUserMotionNode(Node):
     """
     This node controls the robot's motion to follow a user using an action server.
     It receives a goal to follow a user, calculates velocity commands,
     and provides feedback on the distance.
     """
     def __init__(self):
-        super().__init__('user_tracking_controller_node')
-        self.get_logger().info('User Tracking Controller Node has been started.')
+        super().__init__('follow_user_motion_node')
+        self.get_logger().info('Follow User Motion Node has been started.')
 
         # Parameters
         self.declare_parameter('cmd_vel_topic', '/cmd_vel')
@@ -97,7 +97,7 @@ class UserTrackingControllerNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = UserTrackingControllerNode()
+    node = FollowUserMotionNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

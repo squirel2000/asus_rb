@@ -3,7 +3,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from geometry_msgs.msg import PoseStamped
-from follow_me_bot.action import FollowUser
+from follow_user.action import FollowUser
 
 class BehaviorCoordinatorNode(Node):
     """

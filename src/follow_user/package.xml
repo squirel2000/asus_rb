@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>follow_me_bot</name>
+  <name>follow_user</name>
   <version>0.0.0</version>
   <description>A ROS2 package to make a TurtleBot3 follow a user.</description>
   <maintainer email="tingying.wu@gmail.com">asus</maintainer>

@@ -8,9 +8,9 @@ def generate_launch_description():
     """
     return LaunchDescription([
         Node(
-            package='follow_me_bot',
-            executable='user_tracking_visual_node.py',
-            name='user_tracking_visual_node',
+            package='follow_user',
+            executable='follow_user_vision_node.py',
+            name='follow_user_vision_node',
             output='screen',
             parameters=[
                 # You can override default parameters here if needed
@@ -19,16 +19,16 @@ def generate_launch_description():
             ]
         ),
         Node(
-            package='follow_me_bot',
-            executable='user_tracking_controller_node.py',
-            name='user_tracking_controller_node',
+            package='follow_user',
+            executable='follow_user_motion_node.py',
+            name='follow_user_motion_node',
             output='screen',
             parameters=[
                 # {'target_distance': 1.2}
             ]
         ),
         Node(
-            package='follow_me_bot',
+            package='follow_user',
             executable='behavior_coordinator_node.py',
             name='behavior_coordinator_node',
             output='screen'

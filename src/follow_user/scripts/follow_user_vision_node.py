@@ -7,15 +7,15 @@ from geometry_msgs.msg import PoseStamped
 import cv2
 from cv_bridge import CvBridge
 
-class UserTrackingVisualNode(Node):
+class FollowUserVisionNode(Node):
     """
     This node handles the computer vision part of the user following feature.
     It subscribes to the robot's camera feed, processes the images to detect
     and locate a user, and then publishes the user's estimated pose.
     """
     def __init__(self):
-        super().__init__('user_tracking_visual_node')
-        self.get_logger().info('User Tracking Visual Node has been started.')
+        super().__init__('follow_user_vision_node')
+        self.get_logger().info('Follow User Vision Node has been started.')
 
         # Parameters
         self.declare_parameter('image_topic', '/camera/color/image_raw')
@@ -108,7 +108,7 @@ class UserTrackingVisualNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = UserTrackingVisualNode()
+    node = FollowUserVisionNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

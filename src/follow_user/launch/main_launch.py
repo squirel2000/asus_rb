@@ -11,13 +11,13 @@ def generate_launch_description():
     It launches the following:
     1. The TurtleBot3 Gazebo simulation with the Waffle model in the TurtleBot3 house world.
     2. RViz with a configuration for TurtleBot3.
-    3. The three nodes from the follow_me_bot package.
+    3. The three nodes from the follow_user package.
     """
     # Path to the turtlebot3_gazebo package
     turtlebot3_gazebo_pkg_dir = get_package_share_directory('turtlebot3_gazebo')
     
     # Path to this package
-    follow_me_bot_pkg_dir = get_package_share_directory('follow_me_bot')
+    follow_user_pkg_dir = get_package_share_directory('follow_user')
 
     # --- Gazebo Simulation ---
     # We will include the turtlebot3_house.launch.py launch file
@@ -31,7 +31,7 @@ def generate_launch_description():
 
     # --- RViz ---
     # Path to the custom RViz configuration file
-    rviz_config_file = os.path.join(follow_me_bot_pkg_dir, 'rviz', 'follow_me.rviz')
+    rviz_config_file = os.path.join(follow_user_pkg_dir, 'rviz', 'follow_me.rviz')
 
     # The turtlebot3_bringup package is responsible for launching RViz.
     turtlebot3_bringup_pkg_dir = get_package_share_directory('turtlebot3_bringup')
@@ -44,14 +44,14 @@ def generate_launch_description():
 
     # --- Follow Me Bot Nodes ---
     # Include the launch file for our custom nodes.
-    follow_me_bot_launch = IncludeLaunchDescription(
+    follow_user_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(follow_me_bot_pkg_dir, 'launch', 'follow_me_bot.launch.py')
+            os.path.join(follow_user_pkg_dir, 'launch', 'follow_user.launch.py')
         )
     )
 
     return LaunchDescription([
         gazebo_launch,
         rviz_launch,
-        follow_me_bot_launch
+        follow_user_launch
     ])
