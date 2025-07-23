@@ -9,7 +9,7 @@ def generate_launch_description():
     return LaunchDescription([
         Node(
             package='follow_me_bot',
-            executable='user_tracking_visual_node',
+            executable='user_tracking_visual_node.py',
             name='user_tracking_visual_node',
             output='screen',
             parameters=[
@@ -20,7 +20,7 @@ def generate_launch_description():
         ),
         Node(
             package='follow_me_bot',
-            executable='user_tracking_controller_node',
+            executable='user_tracking_controller_node.py',
             name='user_tracking_controller_node',
             output='screen',
             parameters=[
@@ -29,7 +29,7 @@ def generate_launch_description():
         ),
         Node(
             package='follow_me_bot',
-            executable='behavior_coordinator_node',
+            executable='behavior_coordinator_node.py',
             name='behavior_coordinator_node',
             output='screen'
         ),
