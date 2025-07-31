@@ -1,3 +1,8 @@
 {
-  "cmake.sourceDirectory": "/home/asus/Gits/asus_rb/src/follow_user"
+  "cmake.sourceDirectory": "/home/asus/Gits/asus_rb/src/follow_user",
+  "spellright.language": [],
+  "spellright.documentTypes": [
+    "latex",
+    "plaintext"
+  ]
 }

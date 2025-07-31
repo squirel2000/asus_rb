@@ -4,11 +4,7 @@ import os
 import subprocess
 import sys
 import time
-try:
-    from termcolor import colored
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "termcolor"])
-    from termcolor import colored
+from termcolor import colored
 
 def formatExeCommand(args):
     """
