@@ -14,7 +14,7 @@ def formatExeCommand(args):
 
     return {
         'mock_server': f'gnome-terminal --tab --title="Mock API Server" -- /bin/bash -c "python3 mock_api_server.py{exec_bash}"',
-        'perception_manager': f'gnome-terminal --tab --title="Perception Manager" -- /bin/bash -c "ros2 run perception_control_manager perception_control_manager_node.py --ros-args -p robot_port:={args.port}{exec_bash}"',
+        'perception_manager': f'gnome-terminal --tab --title="Perception Manager" -- /bin/bash -c "ros2 run perception_control_manager perception_control_manager_node.py{exec_bash}"',
         'navigation_motion': f'gnome-terminal --tab --title="Navigation Motion" -- /bin/bash -c "ros2 run navigation navigation_motion_node.py{exec_bash}"',
         'test_navigation': f'gnome-terminal --tab --title="Test Navigation" -- /bin/bash -c "ros2 run navigation test_navigation.py{exec_bash}"',
     }
@@ -53,7 +53,6 @@ def helper():
     Sets up and parses command-line arguments.
     """
     parser = argparse.ArgumentParser(description='Launch script for the mock navigation test.')
-    parser.add_argument('-p', '--port', type=int, default=1448, help='Port for the mock API server.')
     parser.add_argument('-t', '--test', action='store_true', help='Launch the test_navigation.py script.')
     parser.add_argument('-d', '--debug', action='store_true', help="add 'exec bash' for debug and print commands")
     args = parser.parse_args()

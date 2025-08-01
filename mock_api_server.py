@@ -3,7 +3,7 @@ from flask import Flask, request, jsonify
 import threading
 import time
 import uuid
-
+import random
 
 ROBOT_API_PORT = 1448
 app = Flask(__name__)
@@ -13,12 +13,38 @@ actions = {}
 current_action_id = None
 
 # --- Mock Data ---
-def get_mock_pose():
-    """Returns a mock pose."""
-    return {
-        "x": 1.0, "y": 2.0, "z": 0.0,
-        "orientation": {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0}
-    }
+current_pose = {
+    "x": 0.0, "y": 0.0, "z": 0.0,
+    "orientation": {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0}
+}
+target_pose = None
+pose_lock = threading.Lock()
+
+def update_pose_thread():
+    """A thread that simulates robot movement by updating its pose."""
+    global current_pose, target_pose
+    log_counter = 0
+    while True:
+        with pose_lock:
+            if target_pose is None or (
+                abs(current_pose['x'] - target_pose['x']) < 0.1 and
+                abs(current_pose['y'] - target_pose['y']) < 0.1
+            ):
+                target_pose = {
+                    "x": round(random.uniform(-10.0, 10.0), 2),
+                    "y": round(random.uniform(-10.0, 10.0), 2)
+                }
+                app.logger.info(f"New target set: {target_pose}")
+
+            # Move towards the target
+            current_pose['x'] += 0.05 * (target_pose['x'] - current_pose['x'])
+            current_pose['y'] += 0.05 * (target_pose['y'] - current_pose['y'])
+
+            if log_counter % 20 == 0:
+                app.logger.info(f"Current Pose: x={current_pose['x']:.2f}, y={current_pose['y']:.2f}")
+            log_counter += 1
+
+        time.sleep(0.05)  # 20 Hz
 
 # --- Action Simulation Thread ---
 def simulate_action(action_id):
@@ -42,8 +68,8 @@ def simulate_action(action_id):
 @app.route('/api/core/slam/v1/localization/pose', methods=['GET'])
 def get_pose():
     """Endpoint to get the current robot pose."""
-    app.logger.info("Received request for /api/core/slam/v1/localization/pose")
-    return jsonify(get_mock_pose())
+    with pose_lock:
+        return jsonify(current_pose)
 
 @app.route('/api/core/motion/v1/actions', methods=['POST'])
 def create_action():
@@ -91,4 +117,8 @@ def cancel_action():
 
 
 if __name__ == '__main__':
+    # Start the pose update thread
+    pose_thread = threading.Thread(target=update_pose_thread)
+    pose_thread.daemon = True
+    pose_thread.start()
     app.run(host='0.0.0.0', port=ROBOT_API_PORT, debug=True)

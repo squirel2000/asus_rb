@@ -2,21 +2,17 @@
 
 This package provides a ROS2 action server to navigate the robot to a specified pose using the Slamtec RESTful API.
 
-## How to Build and Run
-1. Navigate to your ROS2 workspace directory.
+## How to Run
 
-2. Build the package using colcon and source the workspace:
+1.  Navigate to your ROS2 workspace directory, and build the package using colcon and source the workspace:
+
 ```bash
 colcon build --packages-select navigation
 source install/setup.bash
 ```
 
-3. Open a terminal and run the navigation action server.
-```bash
-ros2 run navigation navigation_motion_node.py
-```
+2.  Use the provided launch script to run all the components at once:
 
-4. In another terminal, run the test client to send a goal:
 ```bash
-ros2 run navigation test_navigation.py
+python3 launch_mock_test.py --test
 ```
