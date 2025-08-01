@@ -31,9 +31,14 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 
 # This installs the Python scripts located in the "scripts" directory as executables
 install(PROGRAMS
-  # scripts/behavior_coordinator_node.py
   scripts/navigation_motion_node.py
   DESTINATION lib/${PROJECT_NAME}
+)
+
+# Install python modules
+install(DIRECTORY
+  scripts/utils
+  DESTINATION lib/${PROJECT_NAME}/
 )
 
 # --- Launch File Installation ---
