@@ -3,8 +3,8 @@ import requests
 from geometry_msgs.msg import PoseStamped
 
 class RestfulAPI:
-    def __init__(self, robot_ip, logger):
-        self.base_url = f"http://{robot_ip}/api/core"
+    def __init__(self, robot_ip, logger, port=1448):
+        self.base_url = f"http://{robot_ip}:{port}/api/core"
         self.logger = logger
 
     def create_navigation_action(self, pose: PoseStamped):
