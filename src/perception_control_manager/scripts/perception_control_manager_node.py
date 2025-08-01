@@ -1,8 +1,9 @@
+#!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
 from std_srvs.srv import Trigger
-from perception_control_manager.restful_api import RestfulAPI
+from utils.restful_api import RestfulAPI
 from perception_control_manager.srv import CreateNavigation, GetActionStatus
 
 class PerceptionControlManagerNode(Node):

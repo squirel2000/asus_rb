@@ -19,8 +19,8 @@ install(PROGRAMS
 )
 
 install(DIRECTORY
-  scripts/utils/
-  DESTINATION lib/${PROJECT_NAME}/
+  scripts/utils
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)
