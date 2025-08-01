@@ -6,12 +6,19 @@ from std_srvs.srv import Trigger
 from utils.restful_api import RestfulAPI
 from perception_control_manager.srv import CreateNavigation, GetActionStatus
 
+# slamtec https://bucket-download.slamtec.com/df3d216e95439541c6f0fafb5ad8dd61d1865a78/AM201_SLAMTEC_Apollo2.0_usermanual_A5M31_v1_en_0613.pdf
+# GET http://127.0.0.1:1448/api/core/system/v1/power/status
+ROBOT_API_IP = '127.0.0.1'
+ROBOT_API_PORT = 1448
+
 class PerceptionControlManagerNode(Node):
     def __init__(self):
         super().__init__('perception_control_manager_node')
-        self.declare_parameter('robot_ip', '127.0.0.1')
+        self.declare_parameter('robot_ip', ROBOT_API_IP)
+        self.declare_parameter('robot_port', ROBOT_API_PORT)
         robot_ip = self.get_parameter('robot_ip').get_parameter_value().string_value
-        self.api = RestfulAPI(robot_ip, self.get_logger())
+        robot_port = self.get_parameter('robot_port').get_parameter_value().integer_value
+        self.api = RestfulAPI(robot_ip, self.get_logger(), port=robot_port)
 
         self.current_pose_publisher = self.create_publisher(PoseStamped, 'current_pose', 10)
         self.timer = self.create_timer(1.0, self.publish_current_pose)
