@@ -33,7 +33,6 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 install(PROGRAMS
   # scripts/behavior_coordinator_node.py
   scripts/navigation_motion_node.py
-  scripts/test_navigation.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -54,6 +53,12 @@ if(BUILD_TESTING)
   # a copyright and license is added to all source files
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  # Install test scripts
+  install(PROGRAMS
+    test/test_navigation.py
+    DESTINATION lib/${PROJECT_NAME}
+  )
 endif()
 
 # --- Finalize the package ---
