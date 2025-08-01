@@ -13,6 +13,7 @@ find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(action_msgs REQUIRED)
+find_package(perception_control_manager REQUIRED)
 
 # Find packages for generating interfaces (actions, services, messages)
 find_package(rosidl_default_generators REQUIRED)
