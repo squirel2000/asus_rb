@@ -12,9 +12,16 @@ find_package(rclpy REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(follow_user REQUIRED)
 find_package(navigation REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "action/Task.action"
+  DEPENDENCIES geometry_msgs
+)
 
 install(PROGRAMS
   scripts/task_coordinator_node.py
+  scripts/send_task_goal_client_example.py
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY
