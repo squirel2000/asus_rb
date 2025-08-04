@@ -23,7 +23,7 @@ def generate_launch_description():
         ),
         Node(
             package='task_coordinator',
-            executable='task_coordinator_node',
+            executable='task_coordinator_node.py',
             name='task_coordinator_node',
             output='screen'
         ),
