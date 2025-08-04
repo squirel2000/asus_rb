@@ -38,11 +38,33 @@ echo 'source ~/turtlebot3_ws/install/setup.bash' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-Environment Variables
-```bash
-echo 'export ROS_DOMAIN_ID=30 #TURTLEBOT3' >> ~/.bashrc
-echo 'source /usr/share/gazebo/setup.sh' >> ~/.bashrc
-echo 'source /opt/ros/humble/setup.bash' >> ~/.bashrc
-source ~/.bashrc
-```
+## How to Launch
+
+To launch the project, use the `follow_user_script.py` script.
+
+### Arguments
+
+*   `-s`, `--sim`: Launch the simulation environment.
+*   `-t`, `--task-coordinator`: Launch the task coordinator.
+*   `--headless`: Launch Gazebo in headless mode.
+*   `-d`, `--debug`: Print commands before execution.
+
+### Examples
+
+*   To launch just the simulation:
+    ```bash
+    python3 follow_user_script.py -s
+    ```
+*   To launch the simulation in headless mode:
+    ```bash
+    python3 follow_user_script.py -s --headless
+    ```
+*   To launch just the task coordinator:
+    ```bash
+    python3 follow_user_script.py -t
+    ```
+*   To launch both:
+    ```bash
+    python3 follow_user_script.py -s -t
+    ```
 
