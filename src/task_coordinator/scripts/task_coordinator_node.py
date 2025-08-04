@@ -6,7 +6,6 @@ from geometry_msgs.msg import PoseStamped
 from follow_user.action import FollowUser
 from navigation.action import Navigate
 from task_coordinator.action import Task
-from std_srvs.srv import SetBool
 
 class TaskCoordinatorNode(Node):
     """
@@ -26,10 +25,6 @@ class TaskCoordinatorNode(Node):
         self.task_server = ActionServer(self, Task, 'task_server', self.execute_task_callback)
         self.follow_user_server = ActionServer(self, FollowUser, 'follow_user_task', self.execute_follow_user_callback)
 
-        # Service to switch modes
-        self.mode_service = self.create_service(SetBool, 'set_follow_mode', self.set_mode_callback)
-        self.is_follow_mode = True  # Default to follow mode
-
         # Subscribers
         user_pose_topic = self.get_parameter('user_pose_topic').get_parameter_value().string_value
         self.user_pose_subscription = self.create_subscription(
@@ -41,25 +36,9 @@ class TaskCoordinatorNode(Node):
         self.follow_user_goal_handle = None
         self.navigate_goal_handle = None
         self.current_user_pose = None
+        self.is_follow_mode = True  # Default to follow mode
 
         self.get_logger().info('Task Coordinator Node has been started.')
-
-    def set_mode_callback(self, request, response):
-        self.is_follow_mode = request.data
-        response.success = True
-        if self.is_follow_mode:
-            response.message = "Switched to Follow User mode"
-            self.get_logger().info("Switched to Follow User mode")
-            if self.navigate_goal_handle:
-                self.get_logger().info('Canceling navigation goal.')
-                self.navigate_goal_handle.cancel_goal_async()
-        else:
-            response.message = "Switched to Navigate mode"
-            self.get_logger().info("Switched to Navigate mode")
-            if self.follow_user_goal_handle:
-                self.get_logger().info('Canceling follow user goal.')
-                self.follow_user_goal_handle.cancel_goal_async()
-        return response
 
     def user_pose_callback(self, msg):
         self.current_user_pose = msg
@@ -67,20 +46,20 @@ class TaskCoordinatorNode(Node):
             self.send_follow_user_goal(self.current_user_pose)
 
     def execute_task_callback(self, goal_handle):
-        if self.is_follow_mode:
-            self.get_logger().info('In follow mode, cannot execute navigation task.')
-            goal_handle.abort()
-            return Task.Result()
-
         self.get_logger().info('Executing navigation task...')
+        self.is_follow_mode = False
+        if self.follow_user_goal_handle and self.follow_user_goal_handle.is_active:
+            self.get_logger().info('Canceling follow user goal.')
+            self.follow_user_goal_handle.cancel_goal_async()
+
         self.send_navigation_goal(goal_handle)
 
     def execute_follow_user_callback(self, goal_handle):
         self.get_logger().info('Executing follow user task...')
-        if not self.is_follow_mode:
-            self.get_logger().info('In navigation mode, cannot execute follow user task.')
-            goal_handle.abort()
-            return FollowUser.Result()
+        self.is_follow_mode = True
+        if self.navigate_goal_handle and self.navigate_goal_handle.is_active:
+            self.get_logger().info('Canceling navigation goal.')
+            self.navigate_goal_handle.cancel_goal_async()
 
         if self.current_user_pose is None:
             self.get_logger().info('User pose not available, waiting...')
