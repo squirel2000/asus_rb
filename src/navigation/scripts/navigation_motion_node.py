@@ -41,13 +41,7 @@ class NavigateActionServer(Node):
 
         # Subscription to the current pose for feedback
         self.current_pose = None
-        self.pose_subscriber = self.create_subscription(
-            PoseStamped,
-            '/current_pose',
-            self.pose_callback,
-            10,
-            callback_group=self.callback_group
-        )
+        self.pose_subscriber = self.create_subscription(PoseStamped, '/current_pose', self.pose_callback, 10, callback_group=self.callback_group)
         
         self.get_logger().info("Navigate to Pose Action Server has been started.")
 
@@ -126,10 +120,6 @@ class NavigateActionServer(Node):
                 result.success = False
                 return result
 
-            if self.current_pose:
-                feedback_msg.current_pose = self.current_pose
-                goal_handle.publish_feedback(feedback_msg)
-
             try:
                 status_response = await self.get_status_client.call_async(status_req)
                 if not status_response:
@@ -141,9 +131,12 @@ class NavigateActionServer(Node):
                 await self.ros_async_sleep(1.0) # USE ROS-NATIVE SLEEP
                 continue
             
+            if self.current_pose:   # TODO: not necessary or change as status_response.status
+                feedback_msg.current_pose = self.current_pose
+                goal_handle.publish_feedback(feedback_msg)
+                
             current_state = status_response.status
             self.get_logger().info(f"Current action status: {current_state}")
-
             if current_state == 'succeeded':
                 self.get_logger().info('Goal succeeded!')
                 goal_handle.succeed()
@@ -156,7 +149,7 @@ class NavigateActionServer(Node):
                 return result
 
             # Use non-blocking ROS-native sleep
-            await self.ros_async_sleep(0.5)
+            await self.ros_async_sleep(0.1)
 
         self.get_logger().info("RCLPY shutdown, aborting goal.")
         await self.cancel_action_client.call_async(Trigger.Request())

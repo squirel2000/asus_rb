@@ -4,9 +4,19 @@ import threading
 import time
 import uuid
 import random
+import logging
+
+class PostOnlyFilter(logging.Filter):
+    def filter(self, record):
+        # Check if the log record has 'GET' in its message
+        if 'GET' in record.getMessage():
+            return False
+        return True
 
 ROBOT_API_PORT = 1448
 app = Flask(__name__)
+log = logging.getLogger('werkzeug')
+log.addFilter(PostOnlyFilter())
 
 # In-memory storage for actions
 actions = {}
@@ -40,11 +50,11 @@ def update_pose_thread():
             current_pose['x'] += 0.05 * (target_pose['x'] - current_pose['x'])
             current_pose['y'] += 0.05 * (target_pose['y'] - current_pose['y'])
 
-            if log_counter % 20 == 0:
+            if log_counter % 50 == 0:
                 app.logger.info(f"Current Pose: x={current_pose['x']:.2f}, y={current_pose['y']:.2f}")
             log_counter += 1
 
-        time.sleep(0.05)  # 20 Hz
+        time.sleep(0.04)  # 25 Hz
 
 # --- Action Simulation Thread ---
 def simulate_action(action_id):
@@ -114,6 +124,33 @@ def cancel_action():
     
     app.logger.warning("Request to cancel an action, but no current action is active.")
     return jsonify({"error": "No active action to cancel"}), 404
+
+
+@app.route('/api/core/system/v1/laserscan', methods=['GET'])
+def get_laserscan():
+    """Endpoint to get the current laser scan data."""
+    with pose_lock:
+        # Generate mock laser scan data
+        laser_points = []
+        for i in range(360):  # 360 points for a full circle
+            laser_points.append({
+                "distance": random.uniform(0.1, 10.0),
+                "angle": (i - 180) * 3.14159 / 180.0,
+                "valid": True
+            })
+
+        laserscan_data = {
+            "pose": {
+                "x": current_pose["x"],
+                "y": current_pose["y"],
+                "z": 0.0,
+                "yaw": 0.0,
+                "pitch": 0.0,
+                "roll": 0.0
+            },
+            "laser_points": laser_points
+        }
+        return jsonify(laserscan_data)
 
 
 if __name__ == '__main__':
