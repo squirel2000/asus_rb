@@ -15,8 +15,9 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 
 install(PROGRAMS
   scripts/perception_control_manager_node.py
-  DESTINATION lib/${PROJECT_NAME}
-)
+  scripts/perception_control_manager_mock_api_server.py
+  DESTINATION lib/${PROJECT_NAME})
+
 
 install(DIRECTORY
   scripts/utils
