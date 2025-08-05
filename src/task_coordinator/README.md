@@ -18,12 +18,6 @@ The `task_coordinator_node` is the central node in this package. It provides an 
 
     An action server for follow-user tasks. The goal is a `user_id`.
 
-#### Services
-
-*   **`/set_follow_mode`** (`std_srvs/srv/SetBool`)
-
-    A service to switch between navigation and follow-user modes. `True` for follow-user mode, `False` for navigation mode.
-
 ## Usage
 
 To run the `task_coordinator_node`, use the following command:

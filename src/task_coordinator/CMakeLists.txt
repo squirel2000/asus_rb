@@ -21,7 +21,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 
 install(PROGRAMS
   scripts/task_coordinator_node.py
-  scripts/send_task_goal_client_example.py
+  scripts/task_client.py
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY

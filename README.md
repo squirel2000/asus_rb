@@ -40,31 +40,52 @@ source ~/.bashrc
 
 ## How to Launch
 
-To launch the project, use the `follow_user_script.py` script.
+To launch the project, use the `amr_client.py` script. This script is used to launch the various nodes of the system.
 
 ### Arguments
 
 *   `-s`, `--sim`: Launch the simulation environment.
 *   `-t`, `--task-coordinator`: Launch the task coordinator.
+*   `-m`, `--mock`: Launch mock HTTP API server and perception manager.
+*   `-c`, `--client`: Launch the task client.
+*   `--test`: Launch navigation test script.
 *   `--headless`: Launch Gazebo in headless mode.
 *   `-d`, `--debug`: Print commands before execution.
 
 ### Examples
 
-*   To launch just the simulation:
+*   To launch the simulation and the task coordinator:
     ```bash
-    python3 follow_user_script.py -s
+    python3 amr_client.py -s -t
     ```
-*   To launch the simulation in headless mode:
+*   To launch the entire system with the mock server and the task client:
     ```bash
-    python3 follow_user_script.py -s --headless
+    python3 amr_client.py -s -t -m -c
     ```
-*   To launch just the task coordinator:
+
+## How to Send Tasks
+
+To send tasks to the AMR, use the `task_client.py` script. This script can be used to send navigation or follow-user goals.
+
+### Navigation Task
+
+*   **Command:** `navigate`
+*   **Arguments:**
+    *   `--x`: X position for the navigation goal (default: 1.0)
+    *   `--y`: Y position for the navigation goal (default: 1.0)
+    *   `--w`: W orientation for the navigation goal (default: 1.0)
+*   **Example:**
     ```bash
-    python3 follow_user_script.py -t
+    ros2 run task_coordinator task_client.py navigate --x 2.0 --y 3.0
     ```
-*   To launch both:
+
+### Follow User Task
+
+*   **Command:** `follow`
+*   **Arguments:**
+    *   `user_id`: The ID of the user to follow.
+*   **Example:**
     ```bash
-    python3 follow_user_script.py -s -t
+    ros2 run task_coordinator task_client.py follow user_123
     ```
 
