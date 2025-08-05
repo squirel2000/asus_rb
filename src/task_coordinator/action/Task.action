@@ -1,5 +1,8 @@
+# Goal: The target pose for the robot to navigate to.
 geometry_msgs/PoseStamped target_pose
 ---
+# Result: Whether the navigation was successful.
 bool success
 ---
+# Feedback: The current pose of the robot during navigation.
 geometry_msgs/PoseStamped current_pose

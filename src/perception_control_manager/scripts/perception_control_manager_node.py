@@ -29,6 +29,8 @@ class PerceptionControlManagerNode(Node):
             GetActionStatus, 'get_action_status', self.get_action_status_callback)
         self.cancel_action_service = self.create_service(
             Trigger, 'cancel_action', self.cancel_action_callback)
+        
+        print("Perception Control Manager Node has been started.")
 
     def publish_current_pose(self):
         pose = self.api.get_current_pose(self.get_clock())

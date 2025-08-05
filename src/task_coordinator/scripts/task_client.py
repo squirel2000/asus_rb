@@ -11,6 +11,7 @@ class TaskClientNode(Node):
     def __init__(self, args):
         super().__init__('task_client_node')
         self.args = args
+        self.get_result_future = None # Initialize the future
         if self.args.action == 'navigate':
             self.client = ActionClient(self, Task, 'task_server')
         elif self.args.action == 'follow':
@@ -53,6 +54,7 @@ class TaskClientNode(Node):
             self.get_logger().info(f'Result: {result.success}')
         elif self.args.action == 'follow':
             self.get_logger().info(f'Result: {result.final_status}')
+        self.destroy_node()
         rclpy.shutdown()
 
     def feedback_callback(self, feedback_msg):
@@ -66,7 +68,7 @@ class TaskClientNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', type=str, default='follow', help='Action to perform', choices=['navigate', 'follow'])
+    parser.add_argument('action', type=str, default='navigate', help='Action to perform', choices=['navigate', 'follow'])
     parser.add_argument('--x', type=float, default=1.0, help='x position for navigation goal')
     parser.add_argument('--y', type=float, default=1.0, help='y position for navigation goal')
     parser.add_argument('--w', type=float, default=1.0, help='w orientation for navigation goal')
@@ -76,6 +78,8 @@ def main(args=None):
     node = TaskClientNode(args)
     node.send_goal()
     rclpy.spin(node)
+
+    # The node will be destroyed and rclpy shut down in get_result_callback
 
 if __name__ == '__main__':
     main()
