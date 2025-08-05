@@ -60,7 +60,7 @@ class TaskCoordinatorNode(Node):
         self.is_follow_mode = False
         if self.follow_user_goal_handle and self.follow_user_goal_handle.is_active:
             self.get_logger().info('Canceling follow user goal.')
-            self.follow_user_goal_handle.cancel_goal_async()
+            cancel_future = self.follow_user_goal_handle.cancel_goal_async()
 
         # Reset the event and result before starting a new navigation task
         self.nav_done_event.clear()
@@ -86,9 +86,9 @@ class TaskCoordinatorNode(Node):
             goal_handle.abort()
             self.get_logger().info('Task goal aborted called.')
             
-        # Add a small delay to allow the result message to be sent
-        import time
-        time.sleep(0.1)
+        # # Add a small delay to allow the result message to be sent
+        # import time
+        # time.sleep(0.1)
         self.get_logger().info('Returning from execute_task_callback.')
         return result
 

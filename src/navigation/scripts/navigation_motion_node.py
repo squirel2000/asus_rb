@@ -5,7 +5,7 @@ from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 
-import time
+from rclpy.task import Future
 
 from geometry_msgs.msg import PoseStamped
 from std_srvs.srv import Trigger
@@ -51,6 +51,17 @@ class NavigateActionServer(Node):
         
         self.get_logger().info("Navigate to Pose Action Server has been started.")
 
+    async def ros_async_sleep(self, seconds: float):
+        """
+        A ROS-compatible asynchronous sleep function that uses a one-shot timer.
+        This is necessary because asyncio.sleep() requires an asyncio event loop.
+        """
+        future = Future()
+        # Create a one-shot timer that sets the future's result when it expires.
+        self.create_timer(seconds, lambda: future.set_result(None))
+        # Await the future to be completed by the timer.
+        await future
+        
     def pose_callback(self, msg):
         """Callback to store the current pose."""
         self.current_pose = msg
@@ -58,15 +69,11 @@ class NavigateActionServer(Node):
     def goal_callback(self, goal_request):
         """Accept or reject a client request to begin an action."""
         self.get_logger().info('Received goal request')
-        # Wait for the service clients to be ready to ensure we can process the goal.
-        if not self.create_nav_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().error('Create navigation service not available, rejecting goal.')
-            return GoalResponse.REJECT
-        if not self.get_status_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().error('Get action status service not available, rejecting goal.')
-            return GoalResponse.REJECT
-        if not self.cancel_action_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().error('Cancel action service not available, rejecting goal.')
+        # Service checks are still a good idea
+        if not self.create_nav_client.wait_for_service(timeout_sec=1.0) or \
+           not self.get_status_client.wait_for_service(timeout_sec=1.0) or \
+           not self.cancel_action_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().error('One or more required services are not available, rejecting goal.')
             return GoalResponse.REJECT
         return GoalResponse.ACCEPT
 
@@ -80,7 +87,7 @@ class NavigateActionServer(Node):
         self.get_logger().info('Received cancel request.')
         return CancelResponse.ACCEPT
 
-    def execute_callback(self, goal_handle):
+    async def execute_callback(self, goal_handle):
         """Executes the navigation action by calling services on the perception_control_manager."""
         self.get_logger().info('Executing goal...')
 
@@ -91,12 +98,15 @@ class NavigateActionServer(Node):
         # 1. Create a navigation action via service
         create_req = CreateNavigation.Request()
         create_req.pose = target_pose
-        future = self.create_nav_client.call_async(create_req)
-        rclpy.spin_until_future_complete(self, future)
-        
-        response = future.result()
-        if not response or not response.success:
-            self.get_logger().error(f"Failed to create navigation action. Reason: {response.action_id if response else 'service call failed'}")
+        try:
+            response = await self.create_nav_client.call_async(create_req)
+            if not response.success:
+                self.get_logger().error(f"Failed to create navigation action. Reason: {response.action_id}")
+                goal_handle.abort()
+                result.success = False
+                return result
+        except Exception as e:
+            self.get_logger().error(f"Service call to create_navigation failed: {e}")
             goal_handle.abort()
             result.success = False
             return result
@@ -110,8 +120,7 @@ class NavigateActionServer(Node):
 
         while rclpy.ok():
             if goal_handle.is_cancel_requested:
-                cancel_future = self.cancel_action_client.call_async(Trigger.Request())
-                rclpy.spin_until_future_complete(self, cancel_future)
+                await self.cancel_action_client.call_async(Trigger.Request())
                 goal_handle.canceled()
                 self.get_logger().info('Goal canceled.')
                 result.success = False
@@ -121,13 +130,15 @@ class NavigateActionServer(Node):
                 feedback_msg.current_pose = self.current_pose
                 goal_handle.publish_feedback(feedback_msg)
 
-            status_future = self.get_status_client.call_async(status_req)
-            rclpy.spin_until_future_complete(self, status_future)
-            
-            status_response = status_future.result()
-            if not status_response:
-                self.get_logger().warn("Could not get action status. Retrying...")
-                time.sleep(1)
+            try:
+                status_response = await self.get_status_client.call_async(status_req)
+                if not status_response:
+                    self.get_logger().warn("Could not get action status. Retrying...")
+                    await self.ros_async_sleep(1.0) # USE ROS-NATIVE SLEEP
+                    continue
+            except Exception as e:
+                self.get_logger().error(f"Service call to get_action_status failed: {e}")
+                await self.ros_async_sleep(1.0) # USE ROS-NATIVE SLEEP
                 continue
             
             current_state = status_response.status
@@ -144,10 +155,11 @@ class NavigateActionServer(Node):
                 result.success = False
                 return result
 
-            time.sleep(0.5)
+            # Use non-blocking ROS-native sleep
+            await self.ros_async_sleep(0.5)
 
         self.get_logger().info("RCLPY shutdown, aborting goal.")
-        self.cancel_action_client.call_async(Trigger.Request())
+        await self.cancel_action_client.call_async(Trigger.Request())
         goal_handle.abort()
         result.success = False
         return result
@@ -155,10 +167,15 @@ class NavigateActionServer(Node):
 def main(args=None):
     rclpy.init(args=args)
     action_server = NavigateActionServer()
+    # The executor needs to be added to the node and spun correctly.
     executor = MultiThreadedExecutor()
-    rclpy.spin(action_server, executor=executor)
-    action_server.destroy_node()
-    rclpy.shutdown()
+    executor.add_node(action_server)
+    try:
+        executor.spin()
+    finally:
+        executor.shutdown()
+        action_server.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
