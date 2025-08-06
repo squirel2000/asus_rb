@@ -13,20 +13,17 @@ To launch the project, use the `amr_client.py` script. This script is used to la
 ### Arguments
 
 *   `-s`, `--sim`: Launch the simulation environment.
-*   `-t`, `--task-coordinator`: Launch the task coordinator.
-*   `-m`, `--mock`: Launch mock HTTP API server and perception manager.
 *   `--headless`: Launch Gazebo in headless mode.
+*   `-m`, `--mock`: Launch mock HTTP API server and perception manager.
+*   `-l`, `--low-level`: Launch the low-level packages.
+*   `-t`, `--task-coordinator`: Launch the task coordinator.
 *   `-d`, `--debug`: Print commands before execution.
 
 ### Examples
 
-*   To launch the simulation and the task coordinator:
+*   To launch the mock HTTP API server and perception manager , task-coordinator, and the low-level packages:
     ```bash
-    python3 amr_client.py -s -t
-    ```
-*   To launch the entire system with the mock server:
-    ```bash
-    python3 amr_client.py -t -m
+    python3 amr_client.py -mtl
     ```
 
 ## How to Send Tasks
@@ -54,5 +51,3 @@ To send tasks to the AMR, use the `task_client.py` script. This script can be us
     ```bash
     ros2 run task_coordinator task_client.py follow user_123
     ```
-
-
