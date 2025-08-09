@@ -11,15 +11,9 @@ find_package(ament_cmake_python REQUIRED)
 
 install(DIRECTORY
   launch
-  DESTINATION share/${PROJECT_NAME}
-)
-
-install(DIRECTORY
+  map
+  param
   rviz
-  DESTINATION share/${PROJECT_NAME}
-)
-
-install(DIRECTORY
   worlds
   DESTINATION share/${PROJECT_NAME}
 )

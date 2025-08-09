@@ -15,15 +15,15 @@ To launch the project, use the `amr_client.py` script. This script is used to la
 *   `-s`, `--sim`: Launch the simulation environment.
 *   `--headless`: Launch Gazebo in headless mode.
 *   `-m`, `--mock`: Launch mock HTTP API server and perception manager.
-*   `-l`, `--low-level`: Launch the low-level packages.
-*   `-t`, `--task-coordinator`: Launch the task coordinator.
+*   `-l`, `--low-level`: Launch the low-level, such as navigation and follow_user, packages.
+*   `-t`, `--task-coordinator`: Launch the high-level task coordinator (a.k.a. controller).
 *   `-d`, `--debug`: Print commands before execution.
 
 ### Examples
 
-*   To launch the mock HTTP API server and perception manager , task-coordinator, and the low-level packages:
+*   To launch the mock HTTP API server and perception manager, the low-level packages, and the task-coordinator:
     ```bash
-    python3 amr_client.py -mtl
+    python3 amr_client.py -mlt
     ```
 
 ## How to Send Tasks

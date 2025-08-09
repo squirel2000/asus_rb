@@ -23,19 +23,25 @@ def generate_launch_description():
     headless = LaunchConfiguration('headless', default='false')
 
     # --- Gazebo Simulation ---
-    # We will include the turtlebot3_house.launch.py launch file
-    # and set the model to 'waffle' as it includes a camera.
     gazebo_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(turtlebot3_gazebo_pkg_dir, 'launch', 'turtlebot3_house.launch.py')
+            os.path.join(turtlebot3_gazebo_pkg_dir, 'launch', 'turtlebot3_world.launch.py')
         ),
+        # turtlebot3_world:
         launch_arguments={
             'model': 'waffle',
-            'world': os.path.join(amr_sim_pkg_dir, 'worlds', 'amr_sim.world'),
-            'x_pose': '-2.5',
-            'y_pose': '-2.5',
-            'gui': headless
+            'x_pose': '-0.5',
+            'y_pose': '-1.5',
+            'headless': headless
         }.items(),
+        # turtlebot3_house:
+        # launch_arguments={
+        #     'model': 'waffle',
+        #     'world': os.path.join(amr_sim_pkg_dir, 'worlds', 'amr_sim.world'),
+        #     'x_pose': '-2.5',
+        #     'y_pose': '-2.5',
+        #     'headless': headless
+        # }.items(),
     )
 
     # --- RViz ---
@@ -51,11 +57,11 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        DeclareLaunchArgument(
-            'headless',
-            default_value='false',
-            description='Whether to run Gazebo in headless mode.'
-        ),
+        # DeclareLaunchArgument(
+        #     'headless',
+        #     default_value='false',
+        #     description='Whether to run Gazebo in headless mode.'
+        # ),
         gazebo_launch,
         rviz_node,
     ])
