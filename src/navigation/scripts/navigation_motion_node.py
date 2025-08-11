@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import rclpy
+import threading
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
@@ -41,9 +42,22 @@ class NavigateActionServer(Node):
 
         # Subscription to the current pose for feedback
         self.current_pose = None
-        self.pose_subscriber = self.create_subscription(PoseStamped, '/current_pose', self.pose_callback, 10, callback_group=self.callback_group)
+        self.pose_subscriber = self.create_subscription(PoseStamped, '/current_pose', self.current_pose_callback, 10, callback_group=self.callback_group)
+        
+        # Subscription for goal updates
+        self.goal_update_subscriber = self.create_subscription(PoseStamped, 'navigate_to_pose/update_goal', self.goal_update_callback, 10, callback_group=self.callback_group)
+        self.updated_goal_pose = None
+        self.update_goal_lock = threading.Lock()
         
         self.get_logger().info("Navigate to Pose Action Server has been started.")
+        self.get_logger().info("Listening for goal updates on: /navigate_to_pose/update_goal")
+
+    # Callback for goal updates
+    def goal_update_callback(self, msg: PoseStamped):
+        """Callback to receive and store an updated goal pose."""
+        self.get_logger().info(f"Received goal update: position(x={msg.pose.position.x}, y={msg.pose.position.y})")
+        with self.update_goal_lock:
+            self.updated_goal_pose = msg
 
     async def ros_async_sleep(self, seconds: float):
         """
@@ -56,7 +70,7 @@ class NavigateActionServer(Node):
         # Await the future to be completed by the timer.
         await future
         
-    def pose_callback(self, msg):
+    def current_pose_callback(self, msg):
         """Callback to store the current pose."""
         self.current_pose = msg
 
@@ -120,15 +134,55 @@ class NavigateActionServer(Node):
                 result.success = False
                 return result
 
+            # Check for and process goal updates
+            local_updated_pose = None
+            with self.update_goal_lock:
+                if self.updated_goal_pose:
+                    local_updated_pose = self.updated_goal_pose
+                    self.updated_goal_pose = None
+
+            if local_updated_pose:  # TODO: Check the response-time and continuity for the "cancel" / "create" actions
+                self.get_logger().info("Processing a goal update...")
+                
+                # 1. Cancel the current low-level action on the robot
+                try:
+                    await self.cancel_action_client.call_async(Trigger.Request())
+                    # await self.ros_async_sleep(0.1) # Give a moment for the cancel to be processed
+                    self.get_logger().info(f"Canceling previous action ID {action_id} to apply new goal.")
+                except Exception as e:
+                    self.get_logger().error(f"Failed to cancel action {action_id}: {e}")
+
+                # 2. Create a new navigation action with the updated pose
+                create_req.pose = local_updated_pose
+                try:
+                    response = await self.create_nav_client.call_async(create_req)
+                    if not response.success:
+                        self.get_logger().error("Failed to create updated navigation action. Aborting. Service call returned success=false.")
+                        goal_handle.abort()
+                        result.success = False
+                        return result
+                    
+                    # 3. Update the action_id we are monitoring
+                    action_id = response.action_id
+                    status_req.action_id = action_id
+                    self.get_logger().info(f"Updated navigation action created with new ID: {action_id}")
+
+                except Exception as e:
+                    self.get_logger().error(f"Service call to create_navigation for goal update failed: {e}")
+                    goal_handle.abort()
+                    result.success = False
+                    return result
+                
+            # Poll for the status of the current action_id
             try:
                 status_response = await self.get_status_client.call_async(status_req)
                 if not status_response:
                     self.get_logger().warn("Could not get action status. Retrying...")
-                    await self.ros_async_sleep(1.0) # USE ROS-NATIVE SLEEP
+                    await self.ros_async_sleep(0.2) # USE ROS-NATIVE SLEEP
                     continue
             except Exception as e:
                 self.get_logger().error(f"Service call to get_action_status failed: {e}")
-                await self.ros_async_sleep(1.0) # USE ROS-NATIVE SLEEP
+                await self.ros_async_sleep(0.2) # USE ROS-NATIVE SLEEP
                 continue
             
             if self.current_pose:   # TODO: not necessary or change as status_response.status
@@ -136,7 +190,7 @@ class NavigateActionServer(Node):
                 goal_handle.publish_feedback(feedback_msg)
                 
             current_state = status_response.status
-            self.get_logger().info(f"Current action status: {current_state}")
+            self.get_logger().info(f"Current action status: {current_state}") # Uncomment for debugging
             if current_state == 'succeeded':
                 self.get_logger().info('Goal succeeded!')
                 goal_handle.succeed()

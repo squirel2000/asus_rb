@@ -20,6 +20,10 @@ def parseCommandLine(args):
         if args.headless:
             sim_launch_cmd += ' headless:=true'
         commands_to_run.append(format_command("AMR Simulation", sim_launch_cmd, args.debug))
+
+    if args.nav2:
+        nav2_launch_cmd = 'ros2 launch amr_sim navigation2.launch.py use_sim_time:=True map:=./src/amr_sim/map/map.yaml'
+        commands_to_run.append(format_command("Navigation2", nav2_launch_cmd, args.debug))
     
     if args.mock:
         # Mock HTTP API Server
@@ -58,10 +62,11 @@ def helper():
     """
     parser = argparse.ArgumentParser(description='Launch script for the AMR project.')
     parser.add_argument('-s', '--sim', action='store_true', help='Launch the Gazebo simulation environment.')
+    parser.add_argument('-n', '--nav2', action='store_true', help='Launch the Navigation2 stack.')
     parser.add_argument('--headless', action='store_true', help='Launch Gazebo in headless mode.')
-    parser.add_argument('-l', '--low-level', action='store_true', help='Launch the low-level packages.')
-    parser.add_argument('-t', '--task-coordinator', action='store_true', help='Launch the task coordinator.')
     parser.add_argument('-m', '--mock', action='store_true', help='Launch mock HTTP API server and perception manager.')
+    parser.add_argument('-l', '--low-level', action='store_true', help='Launch the low-level (e.g., navigation, follow-user) packages.')
+    parser.add_argument('-t', '--task-coordinator', action='store_true', help='Launch the task coordinator.')
     parser.add_argument('-d', '--debug', action='store_true', help="Keep terminals open and print commands.")
     return parser.parse_args()
 
