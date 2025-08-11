@@ -122,7 +122,26 @@ controller_server:
 
     # DWB parameters
     FollowPath:
-      plugin: "dwb_core::DWBLocalPlanner"
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "dwb_core::DWBLocalPlanner"  # RPP: nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController
+      angular_dist_threshold: 0.785
+      forward_sampling_distance: 0.1
+      rotate_to_heading_angular_vel: 0.5  # Smaller is better for avoiding overshoot. (Default: 1.6)
+      max_angular_accel: 3.2
+      simulate_ahead_time: 0.1
+
+    # # Pure Pursuit Controller
+    # # FollowPath:
+    # #   plugin: "nav2_asus_pursuit_controller::AsusPursuitController"
+    #   debug_trajectory_details: True
+    #   desired_linear_vel: 1.0
+    #   lookahead_dist: 0.5
+    #   max_angular_vel: 3.2
+    #   transform_tolerance: 1.0
+
+    # DWB parameters
+    # dwb_local_planner:
+      # plugin: "dwb_core::DWBLocalPlanner"
       debug_trajectory_details: True
       min_vel_x: 0.0
       min_vel_y: 0.0
@@ -247,9 +266,9 @@ global_costmap:
           clearing: True
           marking: True
           data_type: "LaserScan"
-          raytrace_max_range: 3.0
+          raytrace_max_range: 5.5
           raytrace_min_range: 0.0
-          obstacle_max_range: 2.5
+          obstacle_max_range: 5.0
           obstacle_min_range: 0.0
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"

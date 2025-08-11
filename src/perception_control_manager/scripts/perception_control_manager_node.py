@@ -58,7 +58,7 @@ class PerceptionControlManagerNode(Node):
 
     # Control Callbacks
     def create_navigation_callback(self, request, response):
-        self.get_logger().info('Create navigation service called')
+        self.get_logger().info(f'Create navigation service called with pose: {request.pose}')
         action_id = self.api.create_navigation_action(request.pose)
         if action_id:
             response.success = True
@@ -79,7 +79,7 @@ class PerceptionControlManagerNode(Node):
 
     def cancel_action_callback(self, request, response):
         self.get_logger().info('Cancel action service called')
-        self.api.cancel_action()
+        self.api.cancel_current_action()
         response.success = True
         return response
 

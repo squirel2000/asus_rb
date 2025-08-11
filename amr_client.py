@@ -64,9 +64,9 @@ def helper():
     parser.add_argument('-s', '--sim', action='store_true', help='Launch the Gazebo simulation environment.')
     parser.add_argument('-n', '--nav2', action='store_true', help='Launch the Navigation2 stack.')
     parser.add_argument('--headless', action='store_true', help='Launch Gazebo in headless mode.')
-    parser.add_argument('-l', '--low-level', action='store_true', help='Launch the low-level packages.')
-    parser.add_argument('-t', '--task-coordinator', action='store_true', help='Launch the task coordinator.')
     parser.add_argument('-m', '--mock', action='store_true', help='Launch mock HTTP API server and perception manager.')
+    parser.add_argument('-l', '--low-level', action='store_true', help='Launch the low-level (e.g., navigation, follow-user) packages.')
+    parser.add_argument('-t', '--task-coordinator', action='store_true', help='Launch the task coordinator.')
     parser.add_argument('-d', '--debug', action='store_true', help="Keep terminals open and print commands.")
     return parser.parse_args()
 

@@ -57,11 +57,11 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        # DeclareLaunchArgument(
-        #     'headless',
-        #     default_value='false',
-        #     description='Whether to run Gazebo in headless mode.'
-        # ),
+        DeclareLaunchArgument(
+            'headless',
+            default_value='false',
+            description='Whether to run Gazebo in headless mode.'
+        ),
         gazebo_launch,
         rviz_node,
     ])

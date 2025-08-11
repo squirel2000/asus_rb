@@ -5,6 +5,7 @@ import time
 import uuid
 import random
 import logging
+import math
 
 class PostOnlyFilter(logging.Filter):
     def filter(self, record):
@@ -36,19 +37,16 @@ def update_pose_thread():
     log_counter = 0
     while True:
         with pose_lock:
-            if target_pose is None or (
-                abs(current_pose['x'] - target_pose['x']) < 0.1 and
-                abs(current_pose['y'] - target_pose['y']) < 0.1
-            ):
-                target_pose = {
-                    "x": round(random.uniform(-10.0, 10.0), 2),
-                    "y": round(random.uniform(-10.0, 10.0), 2)
-                }
-                app.logger.info(f"New target set: {target_pose}")
-
-            # Move towards the target
-            current_pose['x'] += 0.05 * (target_pose['x'] - current_pose['x'])
-            current_pose['y'] += 0.05 * (target_pose['y'] - current_pose['y'])
+            # Move if target_pose is set
+            if target_pose is not None:
+                # Move towards the target
+                dx = target_pose['x'] - current_pose['x']
+                dy = target_pose['y'] - current_pose['y']
+                dist = math.sqrt(dx**2 + dy**2)
+                if dist > 0.05:  # Move if not too close
+                    step = 0.05  # Step size
+                    current_pose['x'] += step * (dx / dist) if dist > step else dx
+                    current_pose['y'] += step * (dy / dist) if dist > step else dy
 
             if log_counter % 50 == 0:
                 app.logger.info(f"Current Pose: x={current_pose['x']:.2f}, y={current_pose['y']:.2f}")
@@ -62,15 +60,21 @@ def simulate_action(action_id):
     actions[action_id]['status'] = 'running'
     app.logger.info(f"Action {action_id} started.")
     
-    # Simulate work for 5 seconds
-    time.sleep(5)
+    # Loop until close to target or canceled
+    while actions.get(action_id, {}).get('status') == 'running':  # actions[action_id]['status'] != 'canceled':
+        with pose_lock:
+            if target_pose is not None:
+                dx = target_pose['x'] - current_pose['x']
+                dy = target_pose['y'] - current_pose['y']
+                dist = math.sqrt(dx**2 + dy**2)
+                if dist < 0.1:
+                    actions[action_id]['status'] = 'succeeded'
+                    app.logger.info(f"Action {action_id} succeeded (reached target).")
+                    break
+        time.sleep(0.1)  # Check every 0.1s
     
-    # Check if the action was not canceled
-    if action_id in actions and actions[action_id]['status'] != 'canceled':
-        actions[action_id]['status'] = 'succeeded'
-        app.logger.info(f"Action {action_id} succeeded.")
-    else:
-        app.logger.info(f"Action {action_id} was canceled or removed.")
+    # Check if the action was not canceled or removed
+    app.logger.info(f"Action {action_id} was canceled or removed: {actions.get(action_id, {}).get('status')}")
 
 
 # --- API Endpoints ---
@@ -93,6 +97,20 @@ def create_action():
         "status": "pending",
         "request_data": request.json
     }
+    
+    # Set target_pose from the request payload
+    payload = request.json
+    if payload and 'params' in payload and 'target' in payload['params']:
+        with pose_lock:
+            global target_pose
+            target_pose = {
+                'x': payload['params']['target']['x'],
+                'y': payload['params']['target']['y'],
+                # 'theta': 
+            }
+        app.logger.info(f"Set target_pose to {target_pose}")
+    else:
+        app.logger.warning("No valid target in payload; target_pose not updated.")
     
     # Start a background thread to simulate the action
     thread = threading.Thread(target=simulate_action, args=(action_id,))

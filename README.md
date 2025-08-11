@@ -42,6 +42,21 @@ To send tasks to the AMR, use the `task_client.py` script. This script can be us
     ros2 run task_coordinator task_client.py navigate --x 2.0 --y 3.0
     ```
 
+To update the goal mid-task while the robot is still navigating to the first point, you can open a new terminal and publish a new PoseStamped message to the navigate_to_pose/update_goal topic.
+
+*   **Example:**
+    ```bash
+    ros2 topic pub --once /navigate_to_pose/update_goal geometry_msgs/msg/PoseStamped '{
+        header: {
+            frame_id: "map"
+        },
+        pose: {
+            position: {x: -2.0, y: -8.0, z: 0.0},
+            orientation: {w: 1.0, x: 0.0, y: 0.0, z: 0.0}
+        }
+    }'
+    ```
+
 ### Follow User Task
 
 *   **Command:** `follow`
