@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import rclpy
-import threading
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
@@ -9,9 +8,9 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.task import Future
 
 from geometry_msgs.msg import PoseStamped
-from std_srvs.srv import Trigger
 from navigation.action import Navigate
-from perception_control_manager.srv import CreateNavigation, GetActionStatus
+from slamware_ros_sdk.msg import MoveToRequest, CancelActionRequest
+from tf_transformations import euler_from_quaternion
 
 class NavigateActionServer(Node):
     """
@@ -35,29 +34,44 @@ class NavigateActionServer(Node):
             callback_group=self.callback_group
         )
 
-        # Service clients to communicate with the perception_control_manager
-        self.create_nav_client = self.create_client(CreateNavigation, 'create_navigation', callback_group=self.callback_group)
-        self.get_status_client = self.create_client(GetActionStatus, 'get_action_status', callback_group=self.callback_group)
-        self.cancel_action_client = self.create_client(Trigger, 'cancel_action', callback_group=self.callback_group)
-
         # Subscription to the current pose for feedback
         self.current_pose = None
-        self.pose_subscriber = self.create_subscription(PoseStamped, '/current_pose', self.current_pose_callback, 10, callback_group=self.callback_group)
+        self.last_pose = None  # Used to detect if the robot is stuck
+        self.pose_subscriber = self.create_subscription(PoseStamped, '/robot_pose', self.current_pose_callback, 10, callback_group=self.callback_group)
         
-        # Subscription for goal updates
-        self.goal_update_subscriber = self.create_subscription(PoseStamped, 'navigate_to_pose/update_goal', self.goal_update_callback, 10, callback_group=self.callback_group)
-        self.updated_goal_pose = None
-        self.update_goal_lock = threading.Lock()
-        
-        self.get_logger().info("Navigate to Pose Action Server has been started.")
-        self.get_logger().info("Listening for goal updates on: /navigate_to_pose/update_goal")
+        # Publishers to communicate with the slamware_ros_sdk
+        self.publisher_move_to = self.create_publisher(
+            MoveToRequest,
+            '/slamware_ros_sdk_server_node/move_to',
+            10,
+            callback_group=self.callback_group
+        )
+        self.publisher_cancel = self.create_publisher(
+            CancelActionRequest,
+            '/slamware_ros_sdk_server_node/cancel_action',
+            10,
+            callback_group=self.callback_group
+        )
 
-    # Callback for goal updates
-    def goal_update_callback(self, msg: PoseStamped):
-        """Callback to receive and store an updated goal pose."""
-        self.get_logger().info(f"Received goal update: position(x={msg.pose.position.x}, y={msg.pose.position.y})")
-        with self.update_goal_lock:
-            self.updated_goal_pose = msg
+        # Declare ROS parameters with default values
+        self.declare_parameter('success_distance_threshold', 0.1)  # Position distance threshold (meters)
+        self.declare_parameter('success_yaw_threshold', 0.1)       # Yaw angle threshold (radians, ~5.7 degrees)
+        self.declare_parameter('stuck_timeout_sec', 30.0)          # Stuck timeout duration (seconds)
+        self.declare_parameter('stuck_distance_threshold', 0.05)   # Stuck detection distance threshold (meters)
+
+        # Get parameter values
+        self.success_distance_threshold = self.get_parameter('success_distance_threshold').get_parameter_value().double_value
+        self.success_yaw_threshold = self.get_parameter('success_yaw_threshold').get_parameter_value().double_value
+        self.stuck_timeout_sec = self.get_parameter('stuck_timeout_sec').get_parameter_value().double_value
+        self.stuck_distance_threshold = self.get_parameter('stuck_distance_threshold').get_parameter_value().double_value
+
+        self.get_logger().info("Navigate to Pose Action Server has been started.")
+        self.get_logger().info(
+            f"Parameters: success_distance_threshold={self.success_distance_threshold:.2f}, "
+            f"success_yaw_threshold={self.success_yaw_threshold:.2f}, "
+            f"stuck_timeout_sec={self.stuck_timeout_sec:.2f}, "
+            f"stuck_distance_threshold={self.stuck_distance_threshold:.2f}"
+        )
 
     async def ros_async_sleep(self, seconds: float):
         """
@@ -78,11 +92,6 @@ class NavigateActionServer(Node):
         """Accept or reject a client request to begin an action."""
         self.get_logger().info('Received goal request')
         # Service checks are still a good idea
-        if not self.create_nav_client.wait_for_service(timeout_sec=1.0) or \
-           not self.get_status_client.wait_for_service(timeout_sec=1.0) or \
-           not self.cancel_action_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().error('One or more required services are not available, rejecting goal.')
-            return GoalResponse.REJECT
         return GoalResponse.ACCEPT
 
     def handle_accepted_callback(self, goal_handle):
@@ -95,118 +104,129 @@ class NavigateActionServer(Node):
         self.get_logger().info('Received cancel request.')
         return CancelResponse.ACCEPT
 
+    def publish_move_to(self, pose: PoseStamped, action_id: str):
+        """Publish a MoveToRequest message with the given pose."""
+        msg = MoveToRequest()
+        msg.location.x = pose.pose.position.x
+        msg.location.y = pose.pose.position.y
+        msg.location.z = pose.pose.position.z
+        # Extract yaw from quaternion
+        quaternion = (
+            pose.pose.orientation.x,
+            pose.pose.orientation.y,
+            pose.pose.orientation.z,
+            pose.pose.orientation.w
+        )
+        _, _, yaw = euler_from_quaternion(quaternion)
+        msg.yaw = yaw
+        msg.options.opt_flags.flags = 32 # flag: 'with_yaw'
+        msg.options.speed_ratio.is_valid = True
+        msg.options.speed_ratio.value = 1.0
+        
+        self.publisher_move_to.publish(msg)
+        self.get_logger().info(
+            f'Published MoveToRequest for action {action_id}: location=(%.2f, %.2f, %.2f), yaw=%.2f, speed_ratio=%.2f' % 
+            (msg.location.x, msg.location.y, msg.location.z, msg.yaw, msg.options.speed_ratio.value)
+        )
+
+    def publish_cancel(self, action_id: str):
+        """Publish a CancelActionRequest message."""
+        msg = CancelActionRequest()
+        self.publisher_cancel.publish(msg)
+        self.get_logger().info(f'Published CancelActionRequest for action {action_id}')
+
+    def _is_goal_reached(self, current_pose: PoseStamped, target_pose: PoseStamped) -> bool:
+        """Check if the robot has reached the target pose (position and yaw)."""
+        # Calculate position distance
+        dx = current_pose.pose.position.x - target_pose.pose.position.x
+        dy = current_pose.pose.position.y - target_pose.pose.position.y
+        distance = (dx**2 + dy**2)**0.5
+        
+        # Extract yaw angles
+        q1 = (current_pose.pose.orientation.x, current_pose.pose.orientation.y, 
+              current_pose.pose.orientation.z, current_pose.pose.orientation.w)
+        q2 = (target_pose.pose.orientation.x, target_pose.pose.orientation.y, 
+              target_pose.pose.orientation.z, target_pose.pose.orientation.w)
+        _, _, yaw1 = euler_from_quaternion(q1)
+        _, _, yaw2 = euler_from_quaternion(q2)
+        yaw_diff = abs(yaw1 - yaw2)
+        # Ensure yaw difference is in [0, π]
+        if yaw_diff > 3.1415926535:
+            yaw_diff = 2 * 3.1415926535 - yaw_diff
+            
+        # Debug logging
+        self.get_logger().debug(f"Current distance: {distance:.2f} m, yaw difference: {yaw_diff:.2f} rad")
+        
+        # Check if goal is reached
+        return distance < self.success_distance_threshold and yaw_diff < self.success_yaw_threshold
+
+    def _is_stuck(self, current_pose: PoseStamped, last_pose: PoseStamped) -> bool:
+        """Check if the robot is stuck based on position change."""
+        if current_pose is None or last_pose is None:
+            return False
+        dx = current_pose.pose.position.x - last_pose.pose.position.x
+        dy = current_pose.pose.position.y - last_pose.pose.position.y
+        distance_moved = (dx**2 + dy**2)**0.5
+        return distance_moved < self.stuck_distance_threshold
+
     async def execute_callback(self, goal_handle):
-        """Executes the navigation action by calling services on the perception_control_manager."""
+        """Executes the navigation action by publishing to slamware_ros_sdk topics."""
         self.get_logger().info('Executing goal...')
 
         target_pose = goal_handle.request.target_pose
         feedback_msg = Navigate.Feedback()
         result = Navigate.Result()
 
-        # 1. Create a navigation action via service
-        create_req = CreateNavigation.Request()
-        create_req.pose = target_pose
-        try:
-            response = await self.create_nav_client.call_async(create_req)
-            if not response.success:
-                self.get_logger().error(f"Failed to create navigation action. Reason: {response.action_id}")
-                goal_handle.abort()
-                result.success = False
-                return result
-        except Exception as e:
-            self.get_logger().error(f"Service call to create_navigation failed: {e}")
-            goal_handle.abort()
-            result.success = False
-            return result
-        
-        action_id = response.action_id
-        self.get_logger().info(f"Navigation action created with ID: {action_id}")
+        # 1. Create a navigation action via publisher
+        action_id = str(goal_handle.goal_id.uuid)  # Use goal_id.uuid as action_id
+        self.publish_move_to(target_pose, action_id)
 
         # 2. Monitor the action status
-        status_req = GetActionStatus.Request()
-        status_req.action_id = action_id
+        last_move_time = self.get_clock().now()
+        self.last_pose = self.current_pose
 
         while rclpy.ok():
+            # Check if robot is stuck
+            if self.current_pose and self.last_pose:
+                if self._is_stuck(self.current_pose, self.last_pose):
+                    if (self.get_clock().now() - last_move_time).nanoseconds / 1e9 > self.stuck_timeout_sec:
+                        self.get_logger().error(
+                            f"Robot stuck for {self.stuck_timeout_sec} seconds at position "
+                            f"(x={self.current_pose.pose.position.x:.2f}, y={self.current_pose.pose.position.y:.2f})"
+                        )
+                        self.get_logger().info("Goal aborted due to robot being stuck")
+                        self.publish_cancel(action_id)
+                        goal_handle.abort()
+                        result.success = False
+                        return result
+                else:
+                    last_move_time = self.get_clock().now()
+                    self.last_pose = self.current_pose
+
             if goal_handle.is_cancel_requested:
-                await self.cancel_action_client.call_async(Trigger.Request())
+                self.publish_cancel(action_id)
                 goal_handle.canceled()
                 self.get_logger().info('Goal canceled.')
                 result.success = False
                 return result
 
-            # Check for and process goal updates
-            local_updated_pose = None
-            with self.update_goal_lock:
-                if self.updated_goal_pose:
-                    local_updated_pose = self.updated_goal_pose
-                    self.updated_goal_pose = None
-
-            if local_updated_pose:  # TODO: Check the response-time and continuity for the "cancel" / "create" actions
-                self.get_logger().info("Processing a goal update...")
-                
-                # 1. Cancel the current low-level action on the robot
-                try:
-                    await self.cancel_action_client.call_async(Trigger.Request())
-                    # await self.ros_async_sleep(0.1) # Give a moment for the cancel to be processed
-                    self.get_logger().info(f"Canceling previous action ID {action_id} to apply new goal.")
-                except Exception as e:
-                    self.get_logger().error(f"Failed to cancel action {action_id}: {e}")
-
-                # 2. Create a new navigation action with the updated pose
-                create_req.pose = local_updated_pose
-                try:
-                    response = await self.create_nav_client.call_async(create_req)
-                    if not response.success:
-                        self.get_logger().error("Failed to create updated navigation action. Aborting. Service call returned success=false.")
-                        goal_handle.abort()
-                        result.success = False
-                        return result
-                    
-                    # 3. Update the action_id we are monitoring
-                    action_id = response.action_id
-                    status_req.action_id = action_id
-                    self.get_logger().info(f"Updated navigation action created with new ID: {action_id}")
-
-                except Exception as e:
-                    self.get_logger().error(f"Service call to create_navigation for goal update failed: {e}")
-                    goal_handle.abort()
-                    result.success = False
-                    return result
-                
-            # Poll for the status of the current action_id
-            try:
-                status_response = await self.get_status_client.call_async(status_req)
-                if not status_response:
-                    self.get_logger().warn("Could not get action status. Retrying...")
-                    await self.ros_async_sleep(0.2) # USE ROS-NATIVE SLEEP
-                    continue
-            except Exception as e:
-                self.get_logger().error(f"Service call to get_action_status failed: {e}")
-                await self.ros_async_sleep(0.2) # USE ROS-NATIVE SLEEP
-                continue
-            
-            if self.current_pose:   # TODO: not necessary or change as status_response.status
+            # Publish feedback if current pose is available
+            if self.current_pose:
                 feedback_msg.current_pose = self.current_pose
                 goal_handle.publish_feedback(feedback_msg)
                 
-            current_state = status_response.status
-            self.get_logger().info(f"Current action status: {current_state}") # Uncomment for debugging
-            if current_state == 'succeeded':
-                self.get_logger().info('Goal succeeded!')
-                goal_handle.succeed()
-                result.success = True
-                return result
-            elif current_state in ['failed', 'error', 'aborted']:
-                self.get_logger().error(f"Goal failed with status: {current_state}")
-                goal_handle.abort()
-                result.success = False
-                return result
+                # Check if the robot has reached the target pose
+                if self._is_goal_reached(self.current_pose, target_pose):
+                    self.get_logger().info('Goal succeeded!')
+                    goal_handle.succeed()
+                    result.success = True
+                    return result
 
             # Use non-blocking ROS-native sleep
             await self.ros_async_sleep(0.1)
 
         self.get_logger().info("RCLPY shutdown, aborting goal.")
-        await self.cancel_action_client.call_async(Trigger.Request())
+        self.publish_cancel(action_id)
         goal_handle.abort()
         result.success = False
         return result
