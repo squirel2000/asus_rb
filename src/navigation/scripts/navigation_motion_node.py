@@ -11,6 +11,7 @@ from geometry_msgs.msg import PoseStamped
 from navigation.action import Navigate
 from slamware_ros_sdk.msg import MoveToRequest, CancelActionRequest
 from tf_transformations import euler_from_quaternion
+from std_msgs.msg import Float32MultiArray
 
 class NavigateActionServer(Node):
     """
@@ -38,6 +39,10 @@ class NavigateActionServer(Node):
         self.current_pose = None
         self.last_pose = None  # Used to detect if the robot is stuck
         self.pose_subscriber = self.create_subscription(PoseStamped, '/robot_pose', self.current_pose_callback, 10, callback_group=self.callback_group)
+        
+        # Subscription to the AMR's remaining target points
+        self.remaining_targets: list[list] = None
+        self.remaining_targets_subscriber = self.create_subscription(Float32MultiArray, '/remaining_targets', self.remaining_targets_callback, 10, callback_group=self.callback_group)
         
         # Publishers to communicate with the slamware_ros_sdk
         self.publisher_move_to = self.create_publisher(
@@ -88,10 +93,26 @@ class NavigateActionServer(Node):
         """Callback to store the current pose."""
         self.current_pose = msg
 
+    def remaining_targets_callback(self, msg):
+        """Callback to store the AMR's remaining target points."""
+
+        # Get dimension information from layout
+        num_points = msg.layout.dim[0].size  # Number of points
+        num_coords = msg.layout.dim[1].size  # Number of coordinates per point
+
+        # Reconstruct 2D array from flattened data
+        points = [
+            list(msg.data[i:i + num_coords])
+            for i in range(0, len(msg.data), num_coords)
+        ]
+        
+        self.remaining_targets = points
+        self.get_logger().debug(f"Updated remaining_targets: {self.remaining_targets}")
+
     def goal_callback(self, goal_request):
         """Accept or reject a client request to begin an action."""
         self.get_logger().info('Received goal request')
-        # Service checks are still a good idea
+        
         return GoalResponse.ACCEPT
 
     def handle_accepted_callback(self, goal_handle):
@@ -104,7 +125,7 @@ class NavigateActionServer(Node):
         self.get_logger().info('Received cancel request.')
         return CancelResponse.ACCEPT
 
-    def publish_move_to(self, pose: PoseStamped, action_id: str):
+    def publish_move_to(self, pose: PoseStamped, speed_ratio: float, action_id: str):
         """Publish a MoveToRequest message with the given pose."""
         msg = MoveToRequest()
         msg.location.x = pose.pose.position.x
@@ -119,9 +140,9 @@ class NavigateActionServer(Node):
         )
         _, _, yaw = euler_from_quaternion(quaternion)
         msg.yaw = yaw
-        msg.options.opt_flags.flags = 32 # flag: 'with_yaw'
+        msg.options.opt_flags.flags = 48 # 16+32,MoveOptionFlag: [16:'PRECISE', 32:'WITH_YAW']
         msg.options.speed_ratio.is_valid = True
-        msg.options.speed_ratio.value = 1.0
+        msg.options.speed_ratio.value = speed_ratio
         
         self.publisher_move_to.publish(msg)
         self.get_logger().info(
@@ -171,16 +192,21 @@ class NavigateActionServer(Node):
 
     async def execute_callback(self, goal_handle):
         """Executes the navigation action by publishing to slamware_ros_sdk topics."""
-        self.get_logger().info('Executing goal...')
-
         target_pose = goal_handle.request.target_pose
+        speed_ratio = goal_handle.request.speed_ratio
         feedback_msg = Navigate.Feedback()
         result = Navigate.Result()
 
         # 1. Create a navigation action via publisher
         action_id = str(goal_handle.goal_id.uuid)  # Use goal_id.uuid as action_id
-        self.publish_move_to(target_pose, action_id)
 
+        self.publish_move_to(target_pose, speed_ratio, action_id)
+        # Confirm the AMR has received the action and the target point exists
+        while rclpy.ok() and not self.remaining_targets:
+            self.get_logger().info('Waiting for AMR receive action.')
+            await self.ros_async_sleep(0.1)
+
+        self.get_logger().info('Executing goal...')
         # 2. Monitor the action status
         last_move_time = self.get_clock().now()
         self.last_pose = self.current_pose
@@ -214,14 +240,21 @@ class NavigateActionServer(Node):
             if self.current_pose:
                 feedback_msg.current_pose = self.current_pose
                 goal_handle.publish_feedback(feedback_msg)
-                
-                # Check if the robot has reached the target pose
-                if self._is_goal_reached(self.current_pose, target_pose):
-                    self.get_logger().info('Goal succeeded!')
-                    goal_handle.succeed()
-                    result.success = True
-                    return result
 
+                if not self.remaining_targets: # No more target points
+
+                    # Check if the robot has reached the target pose
+                    if self._is_goal_reached(self.current_pose, target_pose):
+                        self.get_logger().info('Goal succeeded!')
+                        goal_handle.succeed()
+                        result.success = True
+                        return result
+                    else: # AMR action is done but did not meet threshold criteria
+                        self.get_logger().info('Goal aborted! AMR action is done but did not reach the expected target pose.')
+                        goal_handle.abort()
+                        result.success = False
+                        return result
+                    
             # Use non-blocking ROS-native sleep
             await self.ros_async_sleep(0.1)
 

@@ -118,3 +118,15 @@ class RestfulAPI:
             self.logger.info("Successfully sent cancel request to robot.")
         except requests.exceptions.RequestException as e:
             self.logger.error(f"Error canceling action: {e}")
+    
+    def get_remaining_targets(self):
+        """Gets the remaining target points of the current action"""
+        url = f"{self.base_url}/motion/v1/milestones"
+        try:
+            response = requests.get(url, timeout=2)
+            response.raise_for_status()
+
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Error getting remaining targets: {e}")
+            return None
