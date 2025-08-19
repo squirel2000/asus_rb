@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(navigation)
+project(guidance)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -20,19 +20,19 @@ find_package(rosidl_default_generators REQUIRED)
 
 # --- Handle Action/Service/Message generation ---
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "action/Navigate.action"
+  "action/Guidance.action"
   DEPENDENCIES action_msgs geometry_msgs
 )
 
 
 # --- Python Configuration ---
-# This installs the Python modules located in the "navigation" directory
+# This installs the Python modules located in the "guidance" directory
 # ament_python_install_package(${PROJECT_NAME})
 
 
 # This installs the Python scripts located in the "scripts" directory as executables
 install(PROGRAMS
-  scripts/navigation_motion_node.py
+  scripts/guidance_motion_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -62,7 +62,7 @@ if(BUILD_TESTING)
 
   # Install test scripts
   install(PROGRAMS
-    test/test_navigation.py
+    test/test_guidance.py
     DESTINATION lib/${PROJECT_NAME}
   )
 endif()

@@ -1,6 +1,6 @@
 # Goal
 string user_id
-geometry_msgs/PoseStamped user_pose
+float32 follow_distance
 ---
 # Result
 string final_status

@@ -8,26 +8,26 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.task import Future
 
 from geometry_msgs.msg import PoseStamped
-from navigation.action import Navigate
+from guidance.action import Guidance
 from slamware_ros_sdk.msg import MoveToRequest, CancelActionRequest
 from tf_transformations import euler_from_quaternion
 from std_msgs.msg import Float32MultiArray
 
-class NavigateActionServer(Node):
+class GuidanceActionServer(Node):
     """
-    Action server to navigate the robot to a target pose.
+    Action server to guide the robot to a target pose.
     It communicates with the perception_control_manager node to execute the navigation.
     """
     def __init__(self):
-        super().__init__('navigation_motion_node')
+        super().__init__('guidance_motion_node')
         
         # Use a reentrant callback group to allow for nested service calls and callbacks
         self.callback_group = ReentrantCallbackGroup()
 
         self._action_server = ActionServer(
             self,
-            Navigate,
-            'navigate_to_pose',
+            Guidance,
+            'guide_user_to_pose',
             execute_callback=self.execute_callback,
             goal_callback=self.goal_callback,
             handle_accepted_callback=self.handle_accepted_callback,
@@ -70,7 +70,7 @@ class NavigateActionServer(Node):
         self.stuck_timeout_sec = self.get_parameter('stuck_timeout_sec').get_parameter_value().double_value
         self.stuck_distance_threshold = self.get_parameter('stuck_distance_threshold').get_parameter_value().double_value
 
-        self.get_logger().info("Navigate to Pose Action Server has been started.")
+        self.get_logger().info("Guide User to Pose Action Server has been started.")
         self.get_logger().info(
             f"Parameters: success_distance_threshold={self.success_distance_threshold:.2f}, "
             f"success_yaw_threshold={self.success_yaw_threshold:.2f}, "
@@ -194,8 +194,9 @@ class NavigateActionServer(Node):
         """Executes the navigation action by publishing to slamware_ros_sdk topics."""
         target_pose = goal_handle.request.target_pose
         speed_ratio = goal_handle.request.speed_ratio
-        feedback_msg = Navigate.Feedback()
-        result = Navigate.Result()
+        user_id = goal_handle.request.user_id
+        feedback_msg = Guidance.Feedback()
+        result = Guidance.Result()
 
         # 1. Create a navigation action via publisher
         action_id = str(goal_handle.goal_id.uuid)  # Use goal_id.uuid as action_id
@@ -266,7 +267,7 @@ class NavigateActionServer(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    action_server = NavigateActionServer()
+    action_server = GuidanceActionServer()
     # The executor needs to be added to the node and spun correctly.
     executor = MultiThreadedExecutor()
     executor.add_node(action_server)

@@ -3,7 +3,7 @@
 <package format="3">
   <name>follow_user</name>
   <version>0.0.0</version>
-  <description>A ROS2 package to make a TurtleBot3 follow a user.</description>
+  <description>A ROS2 package to make a AMR follow a user.</description>
   <maintainer email="tingying.wu@gmail.com">asus</maintainer>
   <license>Apache-2.0</license>
 

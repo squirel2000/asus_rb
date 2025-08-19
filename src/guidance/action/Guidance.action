@@ -1,0 +1,11 @@
+# Goal
+geometry_msgs/PoseStamped target_pose
+float32 speed_ratio
+string user_id
+---
+# Result
+bool success
+---
+# Feedback
+string status
+geometry_msgs/PoseStamped current_pose
