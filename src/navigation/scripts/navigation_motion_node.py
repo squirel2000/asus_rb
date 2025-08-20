@@ -125,7 +125,7 @@ class NavigateActionServer(Node):
         self.get_logger().info('Received cancel request.')
         return CancelResponse.ACCEPT
 
-    def publish_move_to(self, pose: PoseStamped, speed_ratio: float, action_id: str):
+    def publish_move_to(self, pose: PoseStamped, speed_ratio: float):
         """Publish a MoveToRequest message with the given pose."""
         msg = MoveToRequest()
         msg.location.x = pose.pose.position.x
@@ -146,15 +146,15 @@ class NavigateActionServer(Node):
         
         self.publisher_move_to.publish(msg)
         self.get_logger().info(
-            f'Published MoveToRequest for action {action_id}: location=(%.2f, %.2f, %.2f), yaw=%.2f, speed_ratio=%.2f' % 
+            f'Published MoveToRequest : location=(%.2f, %.2f, %.2f), yaw=%.2f, speed_ratio=%.2f' % 
             (msg.location.x, msg.location.y, msg.location.z, msg.yaw, msg.options.speed_ratio.value)
         )
 
-    def publish_cancel(self, action_id: str):
+    def publish_cancel(self):
         """Publish a CancelActionRequest message."""
         msg = CancelActionRequest()
         self.publisher_cancel.publish(msg)
-        self.get_logger().info(f'Published CancelActionRequest for action {action_id}')
+        self.get_logger().info(f'Published CancelActionRequest.')
 
     def _is_goal_reached(self, current_pose: PoseStamped, target_pose: PoseStamped) -> bool:
         """Check if the robot has reached the target pose (position and yaw)."""
@@ -188,7 +188,17 @@ class NavigateActionServer(Node):
         dx = current_pose.pose.position.x - last_pose.pose.position.x
         dy = current_pose.pose.position.y - last_pose.pose.position.y
         distance_moved = (dx**2 + dy**2)**0.5
-        return distance_moved < self.stuck_distance_threshold
+
+        q1 = (current_pose.pose.orientation.x, current_pose.pose.orientation.y, 
+            current_pose.pose.orientation.z, current_pose.pose.orientation.w)
+        q2 = (last_pose.pose.orientation.x, last_pose.pose.orientation.y, 
+            last_pose.pose.orientation.z, last_pose.pose.orientation.w)
+        _, _, yaw1 = euler_from_quaternion(q1)
+        _, _, yaw2 = euler_from_quaternion(q2)
+        yaw_diff = abs(yaw1 - yaw2)
+        if yaw_diff > 3.1415926535:
+            yaw_diff = 2 * 3.1415926535 - yaw_diff
+        return distance_moved < self.stuck_distance_threshold and yaw_diff < 0.1
 
     async def execute_callback(self, goal_handle):
         """Executes the navigation action by publishing to slamware_ros_sdk topics."""
@@ -197,9 +207,8 @@ class NavigateActionServer(Node):
         feedback_msg = Navigate.Feedback()
         result = Navigate.Result()
 
-        # 1. Create a navigation action via publisher
-        action_id = str(goal_handle.goal_id.uuid)  # Use goal_id.uuid as action_id
-        self.publish_move_to(target_pose, speed_ratio, action_id)
+        # Create a navigation action via publisher
+        self.publish_move_to(target_pose, speed_ratio)
         
         # Confirm the AMR has received the action and the target point exists
         while rclpy.ok() and not self.remaining_targets:
@@ -207,7 +216,7 @@ class NavigateActionServer(Node):
             await self.ros_async_sleep(0.1)
 
         self.get_logger().info('Executing goal...')
-        # 2. Monitor the action status
+        # Monitor the action status
         last_move_time = self.get_clock().now()
         self.last_pose = self.current_pose
 
@@ -221,7 +230,7 @@ class NavigateActionServer(Node):
                             f"(x={self.current_pose.pose.position.x:.2f}, y={self.current_pose.pose.position.y:.2f})"
                         )
                         self.get_logger().info("Goal aborted due to robot being stuck")
-                        self.publish_cancel(action_id)
+                        self.publish_cancel()
                         goal_handle.abort()
                         result.success = False
                         return result
@@ -230,7 +239,7 @@ class NavigateActionServer(Node):
                     self.last_pose = self.current_pose
 
             if goal_handle.is_cancel_requested:
-                self.publish_cancel(action_id)
+                self.publish_cancel()
                 goal_handle.canceled()
                 self.get_logger().info('Goal canceled.')
                 result.success = False
@@ -259,7 +268,7 @@ class NavigateActionServer(Node):
             await self.ros_async_sleep(0.1)
 
         self.get_logger().info("RCLPY shutdown, aborting goal.")
-        self.publish_cancel(action_id)
+        self.publish_cancel()
         goal_handle.abort()
         result.success = False
         return result

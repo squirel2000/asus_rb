@@ -130,3 +130,46 @@ class RestfulAPI:
         except requests.exceptions.RequestException as e:
             self.logger.error(f"Error getting remaining targets: {e}")
             return None
+
+    def get_health(self):
+        """Get the AMR health status information"""
+        url = f"{self.base_url}/system/v1/robot/health"
+        try:
+            response = requests.get(url, timeout=2)
+            response.raise_for_status()
+            
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Error getting health information: {e}")
+            return None
+
+    def get_events(self):
+        """Get events that occur on the AMR"""
+        url = f"{self.base_url[:-5]}/platform/v1/events"
+        try:
+            response = requests.get(url, timeout=2)
+            response.raise_for_status()
+
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Error getting events: {e}")
+            return None
+
+
+    def set_max_speed(self, param = "base.max_moving_speed", value = 0.5):
+        try:
+            url = f"{self.base_url}/system/v1/parameter"
+            payload = {
+                "param": param,
+                "value": value
+            }
+            
+            response = requests.put(url, json=payload)
+
+            response.raise_for_status()
+            result = response.json()
+            
+            return result
+        except requests.exceptions.RequestException as e:
+            self.logging.error(f"Error setting max speed: {str(e)}")
+            return None  

@@ -10,6 +10,7 @@ find_package(rclpy REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/CreateNavigation.srv"
   "srv/GetActionStatus.srv"
+  "srv/SetMaxSpeed.srv"
   DEPENDENCIES geometry_msgs
 )
 
