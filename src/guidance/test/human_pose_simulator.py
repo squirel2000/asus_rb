@@ -2,36 +2,28 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
-from tf_transformations import euler_from_quaternion, quaternion_from_euler
-import random
+from tf_transformations import euler_from_quaternion
 import math
+import random
 
 class HumanPoseSimulatorAdvanced(Node):
     """
-    A test node that simulates a human following the robot with a random walk model.
-    The human moves at a random speed and may temporarily lose tracking.
+    A test node that simulates a human following the robot with periodic distance changes.
+    The distance changes smoothly with added noise to mimic realistic human movement.
     """
     def __init__(self):
         super().__init__('human_pose_simulator_advanced')
         
         # Parameters
-        self.declare_parameter('min_distance', 0.5)  # Minimum distance behind robot (meters)
-        self.declare_parameter('max_distance', 5.0)  # Maximum distance behind robot (meters)
-        self.declare_parameter('publish_rate', 10.0)  # Publish rate (Hz)
-        self.declare_parameter('human_speed_min', 0.2)  # Minimum human speed (m/s)
-        self.declare_parameter('human_speed_max', 0.8)  # Maximum human speed (m/s)
-        self.declare_parameter('lost_probability', 0.05)  # Probability of losing human per second
-        self.declare_parameter('lost_duration_min', 2.0)  # Min duration of losing human (seconds)
-        self.declare_parameter('lost_duration_max', 5.0)  # Max duration of losing human (seconds)
+        self.declare_parameter('min_distance', 0.8)  # Minimum distance behind robot (meters)
+        self.declare_parameter('max_distance', 3.5)  # Maximum distance behind robot (meters)
+        self.declare_parameter('publish_rate', 20.0)  # Publish rate (Hz)
+        self.declare_parameter('cycle_duration', 6.0)  # Duration of each phase, total cycle = 3 * cycle_duration (seconds)
         
         self.min_distance = self.get_parameter('min_distance').get_parameter_value().double_value
         self.max_distance = self.get_parameter('max_distance').get_parameter_value().double_value
         self.publish_rate = self.get_parameter('publish_rate').get_parameter_value().double_value
-        self.human_speed_min = self.get_parameter('human_speed_min').get_parameter_value().double_value
-        self.human_speed_max = self.get_parameter('human_speed_max').get_parameter_value().double_value
-        self.lost_probability = self.get_parameter('lost_probability').get_parameter_value().double_value
-        self.lost_duration_min = self.get_parameter('lost_duration_min').get_parameter_value().double_value
-        self.lost_duration_max = self.get_parameter('lost_duration_max').get_parameter_value().double_value
+        self.cycle_duration = self.get_parameter('cycle_duration').get_parameter_value().double_value
 
         # Subscriber to robot pose
         self.robot_pose_sub = self.create_subscription(
@@ -41,22 +33,20 @@ class HumanPoseSimulatorAdvanced(Node):
         self.human_pose_pub = self.create_publisher(
             PoseStamped, '/human_relative_pose', 10)
         
+        self.human_pose_view_pub = self.create_publisher(
+            PoseStamped, '/human_pose_view', 10)
+        
         # Timer for publishing
         self.timer = self.create_timer(1.0 / self.publish_rate, self.publish_human_pose)
         
         # State variables
         self.robot_pose = None
-        self.human_distance = random.uniform(self.min_distance, self.max_distance)  # Initial distance
-        self.human_speed = random.uniform(self.human_speed_min, self.human_speed_max)  # Initial speed
-        self.is_lost = False
-        self.lost_start_time = None
-        self.lost_duration = 0.0
+        self.start_time = self.get_clock().now()
         
         self.get_logger().info(
             f'Human Pose Simulator Advanced started with min_distance={self.min_distance:.2f}, '
             f'max_distance={self.max_distance:.2f}, publish_rate={self.publish_rate:.2f} Hz, '
-            f'human_speed_min={self.human_speed_min:.2f}, human_speed_max={self.human_speed_max:.2f}, '
-            f'lost_probability={self.lost_probability:.2f}'
+            f'cycle_duration={self.cycle_duration:.2f} s'
         )
 
     def robot_pose_callback(self, msg):
@@ -67,34 +57,21 @@ class HumanPoseSimulatorAdvanced(Node):
         )
 
     def publish_human_pose(self):
-        """Publish a simulated human relative pose with random walk and occasional loss."""
+        """Publish a simulated human relative pose with smooth distance changes and noise."""
         if self.robot_pose is None:
             self.get_logger().warn('No robot pose received yet, skipping publish.')
             return
         
-        # Check if human is lost
+        # Calculate elapsed time
         current_time = self.get_clock().now()
-        if not self.is_lost and random.random() < self.lost_probability / self.publish_rate:
-            self.is_lost = True
-            self.lost_start_time = current_time
-            self.lost_duration = random.uniform(self.lost_duration_min, self.lost_duration_max)
-            self.get_logger().info(f'Human lost for {self.lost_duration:.2f} seconds')
+        elapsed_time = (current_time - self.start_time).nanoseconds / 1e9
         
-        if self.is_lost:
-            if (current_time - self.lost_start_time).nanoseconds / 1e9 < self.lost_duration:
-                self.get_logger().debug('Human is lost, skipping publish.')
-                return
-            else:
-                self.is_lost = False
-                self.lost_start_time = None
-                self.get_logger().info('Human re-detected.')
-
-        # Update human distance with random walk
-        dt = 1.0 / self.publish_rate
-        self.human_speed += random.uniform(-0.1, 0.1)  # Random speed change
-        self.human_speed = max(self.human_speed_min, min(self.human_speed_max, self.human_speed))
-        self.human_distance -= self.human_speed * dt  # Move closer or farther
-        self.human_distance = max(self.min_distance, min(self.max_distance, self.human_distance))
+        # Define distance ranges (aligned with guidance_action_server.py)
+        cycle_period = 3 * self.cycle_duration  # Total cycle: 15.0 s
+        
+        # Calculate smooth distance using squared sine function
+        human_distance = self.min_distance + (self.max_distance - self.min_distance) * (math.sin(math.pi * elapsed_time / cycle_period) ** 2)
+        human_distance = max(self.min_distance, min(self.max_distance, human_distance))
 
         # Get robot's position and orientation
         robot_x = self.robot_pose.pose.position.x
@@ -108,22 +85,31 @@ class HumanPoseSimulatorAdvanced(Node):
         )
         _, _, robot_yaw = euler_from_quaternion(quaternion)
         
-        # Calculate human position (behind the robot)
-        human_x = robot_x - self.human_distance * math.cos(robot_yaw)
-        human_y = robot_y - self.human_distance * math.sin(robot_yaw)
+        # Calculate human position (behind the robot) with noise
+        noise_sigma = 0.01  # Standard deviation for Gaussian noise (meters)
+        noise_x = random.gauss(0, noise_sigma)
+        noise_y = random.gauss(0, noise_sigma)
+        human_x = robot_x - human_distance * math.cos(robot_yaw) + noise_x
+        human_y = robot_y - human_distance * math.sin(robot_yaw) + noise_y
         
-        # Create human relative pose
+        # Create human absolute pose (for visualization)
         human_pose = PoseStamped()
         human_pose.header = self.robot_pose.header
-        human_pose.pose.position.x = human_x - robot_x
-        human_pose.pose.position.y = human_y - robot_y
+        human_pose.pose.position.x = human_x
+        human_pose.pose.position.y = human_y
         human_pose.pose.position.z = robot_z
         human_pose.pose.orientation = self.robot_pose.pose.orientation
-        
+        self.human_pose_view_pub.publish(human_pose)
+
+        # Create human relative pose
+        human_pose.pose.position.x = human_x - robot_x
+        human_pose.pose.position.y = human_y - robot_y
         self.human_pose_pub.publish(human_pose)
+
         self.get_logger().debug(
             f'Published human relative pose: x={human_pose.pose.position.x:.2f}, '
-            f'y={human_pose.pose.position.y:.2f}, distance={self.human_distance:.2f} m'
+            f'y={human_pose.pose.position.y:.2f}, distance={human_distance:.2f} m, '
+            f'noise_x={noise_x:.3f}, noise_y={noise_y:.3f}'
         )
 
 def main(args=None):
