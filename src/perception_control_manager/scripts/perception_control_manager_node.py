@@ -3,7 +3,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import LaserScan
-from std_srvs.srv import Trigger
+from std_srvs.srv import Trigger, SetBool
 from utils.restful_api import RestfulAPI
 from perception_control_manager.srv import CreateNavigation, GetActionStatus, SetMaxSpeed
 from std_msgs.msg import String, Float32MultiArray, MultiArrayDimension
@@ -28,7 +28,7 @@ class PerceptionControlManagerNode(Node):
 
         self.amr_health_publisher = self.create_publisher(String, 'amr_health', 10)
         self.amr_events_publisher = self.create_publisher(String, 'amr_events', 10)
-        self.timer = self.create_timer(0.2, self.publish_amr_status) # 5 Hz
+        self.info_timer = self.create_timer(0.2, self.publish_amr_status) # 5 Hz
 
         """self.current_pose_publisher = self.create_publisher(PoseStamped, 'current_pose', 10)
         self.pose_timer = self.create_timer(0.04, self.publish_current_pose) # 25 Hz
@@ -43,16 +43,25 @@ class PerceptionControlManagerNode(Node):
             GetActionStatus, 'get_action_status', self.get_action_status_callback)
         self.cancel_action_service = self.create_service(
             Trigger, 'cancel_action', self.cancel_action_callback)"""
+        
         self.set_max_speed_service = self.create_service(
             SetMaxSpeed, 'set_max_speed', self.set_max_speed_callback)
+        self.set_emergency_brake = self.create_service(
+            SetBool, 'set_emergency_brake', self.set_emergency_brake_callback)
 
         print('Perception Control Manager Node has been started.')
         print('Publishers:')
         print(f'  - {self.remaining_targets_publisher.topic} ({self.remaining_targets_publisher.msg_type.__name__}) at {1.0/self.timer.timer_period_ns * 1e9:.2f} Hz')
-        
+        print(f'  - {self.amr_health_publisher.topic} ({self.amr_health_publisher.msg_type.__name__}) at {1.0/self.info_timer.timer_period_ns * 1e9:.2f} Hz')
+        print(f'  - {self.amr_events_publisher.topic} ({self.amr_events_publisher.msg_type.__name__}) at {1.0/self.info_timer.timer_period_ns * 1e9:.2f} Hz')
+
         #print(f'  - {self.current_pose_publisher.topic} ({self.current_pose_publisher.msg_type.__name__}) at {1.0/self.pose_timer.timer_period_ns * 1e9:.2f} Hz')
         #print(f'  - {self.laser_scan_publisher.topic} ({self.laser_scan_publisher.msg_type.__name__}) at {1.0/self.laser_scan_timer.timer_period_ns * 1e9:.2f} Hz')
-        #print('Services:')
+        
+        print('Services:')
+        print(f'  - {self.set_max_speed_service.srv_name} ({self.set_max_speed_service.srv_type.__name__})')
+        print(f'  - {self.set_emergency_brake.srv_name} ({self.set_emergency_brake.srv_type.__name__})')
+
         #print(f'  - {self.create_nav_service.srv_name} ({self.create_nav_service.srv_type.__name__})')
         #print(f'  - {self.get_status_service.srv_name} ({self.get_status_service.srv_type.__name__})')
         #print(f'  - {self.cancel_action_service.srv_name} ({self.cancel_action_service.srv_type.__name__})')
@@ -69,6 +78,17 @@ class PerceptionControlManagerNode(Node):
         response.success = result_move and result_ang
         return response
     
+    def set_emergency_brake_callback(self, request, response):
+
+        self.get_logger().info(f"Set emergency brake: {request.data}")
+
+        brake = "on" if request.data else "off"
+        result = self.api.set_emergency_brake(value= brake)
+        
+        response.success = result
+        return response
+    
+    """
     def create_navigation_callback(self, request, response):
         self.get_logger().info(f'Create navigation service called with pose: {request.pose}')
         action_id = self.api.create_navigation_action(request.pose)
@@ -105,7 +125,8 @@ class PerceptionControlManagerNode(Node):
         scan = self.api.get_laser_scan(self.get_clock())
         if scan:
             self.laser_scan_publisher.publish(scan)
-
+    """
+    
     def publish_remaining_targets(self):
         data = self.api.get_remaining_targets()
         if data:

@@ -173,3 +173,21 @@ class RestfulAPI:
         except requests.exceptions.RequestException as e:
             self.logging.error(f"Error setting max speed: {str(e)}")
             return None  
+
+    def set_emergency_brake(self, param = "base.brake_release", value = "on"):
+        try:
+            url = f"{self.base_url}/system/v1/parameter"
+            payload = {
+                "param": param,
+                "value": value
+            }
+            
+            response = requests.put(url, json=payload)
+
+            response.raise_for_status()
+            result = response.json()
+            
+            return result
+        except requests.exceptions.RequestException as e:
+            self.logging.error(f"Error setting max speed: {str(e)}")
+            return None  
