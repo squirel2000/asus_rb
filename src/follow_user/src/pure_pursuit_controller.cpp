@@ -1,5 +1,7 @@
+// MODIFICATION START: Added new headers and utilities
 #include <rclcpp/rclcpp.hpp>
 #include <nav_msgs/msg/path.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <tf2_ros/transform_listener.h>
@@ -11,6 +13,10 @@
 #include <cmath>
 #include <algorithm>
 #include <memory>
+#include <vector>
+#include <limits>
+#include <angles/angles.h>
+// MODIFICATION END
 
 class PurePursuitController : public rclcpp::Node
 {
@@ -23,15 +29,24 @@ public:
         this->declare_parameter("max_lookahead_dist", 1.5);
         this->declare_parameter("lookahead_time", 1.5);
         this->declare_parameter("desired_linear_vel", 0.5);
+        this->declare_parameter("max_linear_vel", 0.20); 
         this->declare_parameter("max_angular_vel", 1.2);
-        this->declare_parameter("min_approach_linear_velocity", 0.1);
+        // MODIFICATION START: New parameters for smooth turning
+        this->declare_parameter("heading_error_for_pure_rotation", 1.57); // 90 degrees
+        this->declare_parameter("min_heading_error_for_motion", 0.35); // 20 degrees
+        // MODIFICATION END
+        this->declare_parameter("min_approach_linear_velocity", 0.05);
         this->declare_parameter("approach_velocity_scaling_dist", 0.6);
         this->declare_parameter("goal_dist_tol", 0.25);
         this->declare_parameter("path_topic", "/follow_user/planned_path");
+        this->declare_parameter("odom_topic", "/slamware_ros_sdk_server_node/odom");
         this->declare_parameter("cmd_vel_topic", "/cmd_vel");
         this->declare_parameter("base_frame", "base_link");
         this->declare_parameter("global_frame", "odom");
         this->declare_parameter("controller_frequency", 20.0);
+        // MODIFICATION START: New parameter for turn-then-go behavior
+        this->declare_parameter("max_heading_error_for_motion", M_PI / 4.0); // 45 degrees
+        // MODIFICATION END
 
         // Get parameters
         lookahead_dist_ = this->get_parameter("lookahead_dist").as_double();
@@ -39,21 +54,36 @@ public:
         max_lookahead_dist_ = this->get_parameter("max_lookahead_dist").as_double();
         lookahead_time_ = this->get_parameter("lookahead_time").as_double();
         desired_linear_vel_ = this->get_parameter("desired_linear_vel").as_double();
+        max_linear_vel_ = this->get_parameter("max_linear_vel").as_double();
         max_angular_vel_ = this->get_parameter("max_angular_vel").as_double();
+        // MODIFICATION START: Get new parameters
+        heading_error_for_pure_rotation_ = this->get_parameter("heading_error_for_pure_rotation").as_double();
+        min_heading_error_for_motion_ = this->get_parameter("min_heading_error_for_motion").as_double();
+        // MODIFICATION END
         min_approach_linear_velocity_ = this->get_parameter("min_approach_linear_velocity").as_double();
         approach_velocity_scaling_dist_ = this->get_parameter("approach_velocity_scaling_dist").as_double();
         goal_dist_tol_ = this->get_parameter("goal_dist_tol").as_double();
         path_topic_ = this->get_parameter("path_topic").as_string();
+        // FIX START: Use member variable odom_topic_ for consistency
+        odom_topic_ = this->get_parameter("odom_topic").as_string();
+        // FIX END
         cmd_vel_topic_ = this->get_parameter("cmd_vel_topic").as_string();
         base_frame_ = this->get_parameter("base_frame").as_string();
         global_frame_ = this->get_parameter("global_frame").as_string();
         double controller_frequency = this->get_parameter("controller_frequency").as_double();
+        // MODIFICATION START: Get new parameter
+        max_heading_error_for_motion_ = this->get_parameter("max_heading_error_for_motion").as_double();
+        // MODIFICATION END
 
         // Publishers and subscribers
         path_sub_ = this->create_subscription<nav_msgs::msg::Path>(
             path_topic_, 10,
             std::bind(&PurePursuitController::pathCallback, this, std::placeholders::_1));
             
+        odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+            odom_topic_, 10, 
+            std::bind(&PurePursuitController::odomCallback, this, std::placeholders::_1));
+
         cmd_vel_pub_ = this->create_publisher<geometry_msgs::msg::Twist>(cmd_vel_topic_, 10);
         carrot_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("lookahead_point", 10);
 
@@ -69,25 +99,34 @@ private:
     void pathCallback(const nav_msgs::msg::Path::SharedPtr msg)
     {
         if (msg->poses.empty()) {
-            RCLCPP_WARN(this->get_logger(), "Received an empty path.");
+            RCLCPP_WARN(this->get_logger(), "Received an empty path. Ignoring.");
             return;
         }
         current_path_ = *msg;
         path_received_ = true;
         goal_reached_ = false;
-        RCLCPP_INFO(this->get_logger(), "Received path with %zu points", current_path_.poses.size());
+        last_path_segment_idx_ = 0; 
+        RCLCPP_INFO(this->get_logger(), "Received new path with %zu points", current_path_.poses.size());
     }
     
+    void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
+    {
+        current_velocity_ = msg->twist.twist.linear.x;
+    }
+
     void controlLoop()
     {
         if (!path_received_ || current_path_.poses.empty() || goal_reached_) {
-            publishZeroVelocity();
+            if (is_moving_) {
+                publishZeroVelocity();
+                is_moving_ = false;
+            }
             return;
         }
         
         geometry_msgs::msg::PoseStamped robot_pose;
         if (!getRobotPose(robot_pose)) {
-            RCLCPP_ERROR(this->get_logger(), "Failed to get robot pose");
+            RCLCPP_ERROR(this->get_logger(), "Failed to get robot pose, stopping.");
             publishZeroVelocity();
             return;
         }
@@ -95,57 +134,90 @@ private:
         if (isGoalReached(robot_pose)) {
             RCLCPP_INFO(this->get_logger(), "Goal reached!");
             goal_reached_ = true;
+            path_received_ = false;
+            current_path_.poses.clear();
             publishZeroVelocity();
-            path_received_ = false; 
+            is_moving_ = false;
             return;
         }
         
         auto cmd_vel = computeVelocityCommands(robot_pose);
         cmd_vel_pub_->publish(cmd_vel);
+        is_moving_ = true;
     }
 
     geometry_msgs::msg::Twist computeVelocityCommands(const geometry_msgs::msg::PoseStamped& robot_pose)
     {
         geometry_msgs::msg::Twist cmd_vel;
+        cmd_vel.linear.x = 0.0;
+        cmd_vel.angular.z = 0.0;
 
-        // Find lookahead point
         geometry_msgs::msg::PoseStamped carrot_pose;
         if (!getLookaheadPoint(robot_pose, carrot_pose)) {
-            RCLCPP_WARN(this->get_logger(), "Could not find a lookahead point. Stopping.");
-            return cmd_vel;
-        }
-        
-        double lookahead_dist = std::hypot(
-            carrot_pose.pose.position.x - robot_pose.pose.position.x,
-            carrot_pose.pose.position.y - robot_pose.pose.position.y);
-
-        // Calculate curvature
-        double curvature = 0.0;
-        double linear_vel = desired_linear_vel_;
-
-        // Transform lookahead point to robot's frame
-        geometry_msgs::msg::PoseStamped carrot_in_robot_frame;
-        if(!transformPose(base_frame_, carrot_pose, carrot_in_robot_frame))
-        {
-            RCLCPP_WARN(this->get_logger(), "Could not transform lookahead point to robot frame. Stopping.");
-            return cmd_vel;
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "Could not find a lookahead point. Stopping.");
+            return cmd_vel; 
         }
 
-        // The lookahead point is already transformed to the robot frame, so we can simply use atan2
-        double angle_to_carrot = atan2(carrot_in_robot_frame.pose.position.y, carrot_in_robot_frame.pose.position.x);
-        curvature = 2.0 * sin(angle_to_carrot) / lookahead_dist;
+        // MODIFICATION START: Implement "turn-then-go" logic
+        // Calculate the angle to the lookahead point (carrot)
+        double angle_to_carrot_global = atan2(
+            carrot_pose.pose.position.y - robot_pose.pose.position.y,
+            carrot_pose.pose.position.x - robot_pose.pose.position.x);
+
+        // Get the robot's current yaw
+        double robot_yaw = tf2::getYaw(robot_pose.pose.orientation);
         
-        // Regulate linear velocity
-        linear_vel = calculateSpeed(robot_pose);
+        // Calculate the heading error
+        double heading_error = angles::normalize_angle(angle_to_carrot_global - robot_yaw);
+        
+        // MODIFICATION START: Implement smooth, scaled turning
+        double linear_vel = calculateSpeed(robot_pose);
+        double speed_scale = 1.0;
+        if (std::abs(heading_error) > heading_error_for_pure_rotation_) {
+            speed_scale = 0.0; // Error is too large, pure rotation
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "Large heading error. Pure rotation.");
+        } else if (std::abs(heading_error) > min_heading_error_for_motion_) {
+            // Scale speed linearly between the two thresholds
+            speed_scale = (heading_error_for_pure_rotation_ - std::abs(heading_error)) / 
+                          (heading_error_for_pure_rotation_ - min_heading_error_for_motion_);
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "Aligning with scaled speed. Scale: %.2f", speed_scale);
+        }
+        
+        linear_vel *= speed_scale;
+        // MODIFICATION END
+        
+        // The rest of the pure pursuit logic for calculating angular velocity
+        double angle_to_carrot_robot_frame = 0.0;
+        try {
+            geometry_msgs::msg::PoseStamped carrot_in_robot_frame;
+            if (!transformPose(base_frame_, carrot_pose, carrot_in_robot_frame)) {
+                RCLCPP_WARN(this->get_logger(), "Could not transform lookahead point to robot frame. Stopping.");
+                // Return zero velocity if transform fails
+                return geometry_msgs::msg::Twist();
+            }
+            angle_to_carrot_robot_frame = atan2(carrot_in_robot_frame.pose.position.y, carrot_in_robot_frame.pose.position.x);
+        } catch (const tf2::TransformException& ex) {
+            RCLCPP_ERROR(this->get_logger(), "Could not transform lookahead point: %s", ex.what());
+            return cmd_vel;
+        }
+
+        // If we are only rotating, use a simple proportional controller on heading error
+        if (speed_scale == 0.0) {
+            cmd_vel.angular.z = std::copysign(0.7 * max_angular_vel_, heading_error);
+        } else {
+             double lookahead_dist = std::hypot(carrot_pose.pose.position.x - robot_pose.pose.position.x,
+                                               carrot_pose.pose.position.y - robot_pose.pose.position.y);
+            // Avoid division by zero if lookahead distance is tiny
+            if (std::abs(lookahead_dist) < 0.01) {
+                lookahead_dist = 0.01;
+            }
+            double curvature = 2.0 * sin(angle_to_carrot_robot_frame) / lookahead_dist;
+            cmd_vel.angular.z = linear_vel * curvature;
+        }
 
         cmd_vel.linear.x = linear_vel;
-        cmd_vel.angular.z = linear_vel * curvature;
-
-        // Apply constraints
-        if (std::abs(cmd_vel.angular.z) > max_angular_vel_) {
-            cmd_vel.angular.z = std::copysign(max_angular_vel_, cmd_vel.angular.z);
-        }
-
+        cmd_vel.angular.z = std::clamp(cmd_vel.angular.z, -max_angular_vel_, max_angular_vel_);
+        
         return cmd_vel;
     }
 
@@ -155,48 +227,47 @@ private:
             robot_pose.pose.position.x - current_path_.poses.back().pose.position.x,
             robot_pose.pose.position.y - current_path_.poses.back().pose.position.y);
 
+        double commanded_vel;
         if (dist_to_goal < approach_velocity_scaling_dist_) {
-            double velocity = std::max(min_approach_linear_velocity_, 
-                                     (dist_to_goal / approach_velocity_scaling_dist_) * desired_linear_vel_);
-            return velocity;
+            double scale = dist_to_goal / approach_velocity_scaling_dist_;
+            commanded_vel = std::max(min_approach_linear_velocity_, scale * desired_linear_vel_);
+        } else {
+            commanded_vel = desired_linear_vel_;
         }
         
-        return desired_linear_vel_;
+        return std::min(commanded_vel, max_linear_vel_);
     }
 
     bool getLookaheadPoint(const geometry_msgs::msg::PoseStamped& robot_pose,
                            geometry_msgs::msg::PoseStamped& lookahead_point)
     {
-        if (current_path_.poses.empty()) return false;
+        double lookahead_dist = std::clamp(lookahead_time_ * current_velocity_, min_lookahead_dist_, max_lookahead_dist_);
+        
+        size_t closest_segment_idx = findClosestPathSegment(robot_pose, last_path_segment_idx_);
+        last_path_segment_idx_ = closest_segment_idx;
 
-        double current_speed = desired_linear_vel_; // Simplified for now
-        double lookahead_dist = std::clamp(lookahead_dist_ + lookahead_time_ * current_speed, 
-                                           min_lookahead_dist_, max_lookahead_dist_);
+        for (size_t i = closest_segment_idx; i < current_path_.poses.size() - 1; ++i) {
+            auto& p1 = current_path_.poses[i].pose.position;
+            auto& p2 = current_path_.poses[i+1].pose.position;
+            Point intersection = findIntersection(p1, p2, robot_pose.pose.position, lookahead_dist);
 
-        // Find the closest point on the path to the robot
-        auto closest_it = std::min_element(current_path_.poses.begin(), current_path_.poses.end(),
-            [&](const auto& p1, const auto& p2){
-                return std::hypot(p1.pose.position.x - robot_pose.pose.position.x, p1.pose.position.y - robot_pose.pose.position.y) <
-                       std::hypot(p2.pose.position.x - robot_pose.pose.position.x, p2.pose.position.y - robot_pose.pose.position.y);
-            });
-
-        // From the closest point, find the first point that is beyond the lookahead distance
-        for (auto it = closest_it; it != current_path_.poses.end(); ++it) {
-            double dist = std::hypot(it->pose.position.x - robot_pose.pose.position.x,
-                                     it->pose.position.y - robot_pose.pose.position.y);
-            if (dist >= lookahead_dist) {
-                lookahead_point = *it;
+            if (intersection.is_valid) {
+                lookahead_point.header.frame_id = current_path_.header.frame_id;
+                lookahead_point.header.stamp = this->get_clock()->now();
+                lookahead_point.pose.position.x = intersection.x;
+                lookahead_point.pose.position.y = intersection.y;
+                lookahead_point.pose.orientation.w = 1.0;
                 carrot_pub_->publish(lookahead_point);
                 return true;
             }
         }
 
-        // If no point is far enough, take the last point of the path
-        double dist_to_goal = std::hypot(
+        double dist_to_last_point = std::hypot(
             robot_pose.pose.position.x - current_path_.poses.back().pose.position.x,
-            robot_pose.pose.position.y - current_path_.poses.back().pose.position.y);
-        
-        if (dist_to_goal > goal_dist_tol_) {
+            robot_pose.pose.position.y - current_path_.poses.back().pose.position.y
+        );
+
+        if (dist_to_last_point <= lookahead_dist + goal_dist_tol_) {
             lookahead_point = current_path_.poses.back();
             carrot_pub_->publish(lookahead_point);
             return true;
@@ -204,55 +275,114 @@ private:
 
         return false;
     }
+
+    struct Point { double x, y; bool is_valid = false; };
+
+    size_t findClosestPathSegment(const geometry_msgs::msg::PoseStamped& robot_pose, size_t start_idx) {
+        double min_dist_sq = std::numeric_limits<double>::max();
+        size_t closest_idx = start_idx;
+
+        for (size_t i = start_idx; i < current_path_.poses.size(); ++i) {
+            double dx = current_path_.poses[i].pose.position.x - robot_pose.pose.position.x;
+            double dy = current_path_.poses[i].pose.position.y - robot_pose.pose.position.y;
+            double dist_sq = dx * dx + dy * dy;
+
+            if (dist_sq < min_dist_sq) {
+                min_dist_sq = dist_sq;
+                closest_idx = i;
+            }
+        }
+        return (closest_idx > 0) ? closest_idx - 1 : 0;
+    }
+
+    Point findIntersection(const geometry_msgs::msg::Point& p1, const geometry_msgs::msg::Point& p2,
+                           const geometry_msgs::msg::Point& robot_pos, double L)
+    {
+        Point intersection;
+        double dx = p2.x - p1.x;
+        double dy = p2.y - p1.y;
+        double d_sq = dx * dx + dy * dy;
+
+        if (d_sq == 0.0) return intersection;
+
+        // FIX START: Remove unused variable 't' to resolve compiler warning
+        // double t = ((robot_pos.x - p1.x) * dx + (robot_pos.y - p1.y) * dy) / d_sq;
+        // FIX END
+        double L_sq = L * L;
+
+        double a = d_sq;
+        double b = 2 * (dx * (p1.x - robot_pos.x) + dy * (p1.y - robot_pos.y));
+        double c = (p1.x - robot_pos.x) * (p1.x - robot_pos.x) + 
+                   (p1.y - robot_pos.y) * (p1.y - robot_pos.y) - L_sq;
+        
+        double discriminant = b*b - 4*a*c;
+        if (discriminant < 0) return intersection;
+
+        double t1 = (-b + sqrt(discriminant)) / (2*a);
+        if (t1 >= 0 && t1 <= 1) {
+            intersection.x = p1.x + t1 * dx;
+            intersection.y = p1.y + t1 * dy;
+            intersection.is_valid = true;
+            return intersection;
+        }
+
+        double t2 = (-b - sqrt(discriminant)) / (2*a);
+        if (t2 >= 0 && t2 <= 1) {
+            intersection.x = p1.x + t2 * dx;
+            intersection.y = p1.y + t2 * dy;
+            intersection.is_valid = true;
+            return intersection;
+        }
+        
+        return intersection;
+    }
     
     bool getRobotPose(geometry_msgs::msg::PoseStamped& robot_pose)
     {
         try {
             geometry_msgs::msg::TransformStamped transform = tf_buffer_.lookupTransform(
-                global_frame_, base_frame_, tf2::TimePointZero, std::chrono::nanoseconds(100000000));
+                global_frame_, base_frame_, tf2::TimePointZero, std::chrono::seconds(1));
             
             robot_pose.header.stamp = this->now();
             robot_pose.header.frame_id = global_frame_;
             robot_pose.pose.position.x = transform.transform.translation.x;
             robot_pose.pose.position.y = transform.transform.translation.y;
             robot_pose.pose.position.z = transform.transform.translation.z;
+            // FIX START: Correctly access the 'pose' member before 'orientation'
             robot_pose.pose.orientation = transform.transform.rotation;
+            // FIX END
             
             return true;
         } catch (tf2::TransformException& ex) {
-            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, 
-                                "Transform lookup failed: %s", ex.what());
+            RCLCPP_ERROR(this->get_logger(), "Transform lookup from %s to %s failed: %s", 
+                global_frame_.c_str(), base_frame_.c_str(), ex.what());
             return false;
         }
     }
 
     bool transformPose(const std::string& frame, const geometry_msgs::msg::PoseStamped& in_pose,
-                       geometry_msgs::msg::PoseStamped& out_pose) const
+                       geometry_msgs::msg::PoseStamped& out_pose)
     {
         if (in_pose.header.frame_id == frame) {
             out_pose = in_pose;
             return true;
         }
-
         try {
-            tf_buffer_.transform(in_pose, out_pose, frame);
+            tf_buffer_.transform(in_pose, out_pose, frame, std::chrono::milliseconds(500));
             return true;
         } catch (tf2::TransformException & ex) {
-            RCLCPP_ERROR(this->get_logger(), "Exception in transformPose: %s", ex.what());
+            RCLCPP_ERROR(this->get_logger(), "Exception in transformPose to frame %s: %s", frame.c_str(), ex.what());
         }
         return false;
     }
     
     bool isGoalReached(const geometry_msgs::msg::PoseStamped& robot_pose)
     {
-        if (current_path_.poses.empty()) return false;
-        
+        if (current_path_.poses.empty()) return true;
         const auto& goal = current_path_.poses.back();
         double dx = goal.pose.position.x - robot_pose.pose.position.x;
         double dy = goal.pose.position.y - robot_pose.pose.position.y;
-        double distance = std::sqrt(dx * dx + dy * dy);
-        
-        return distance < goal_dist_tol_;
+        return std::hypot(dx, dy) < goal_dist_tol_;
     }
     
     void publishZeroVelocity()
@@ -269,17 +399,27 @@ private:
     double max_lookahead_dist_;
     double lookahead_time_;
     double desired_linear_vel_;
+    double max_linear_vel_;
     double max_angular_vel_;
     double min_approach_linear_velocity_;
     double approach_velocity_scaling_dist_;
     double goal_dist_tol_;
     std::string path_topic_;
+    // FIX START: Use member variable for consistency
+    std::string odom_topic_;
+    // FIX END
     std::string cmd_vel_topic_;
     std::string base_frame_;
     std::string global_frame_;
+    // MODIFICATION START
+    double max_heading_error_for_motion_;
+    // MODIFICATION END
+    double heading_error_for_pure_rotation_;
+    double min_heading_error_for_motion_;
     
     // ROS components
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_sub_;
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr carrot_pub_;
     rclcpp::TimerBase::SharedPtr control_timer_;
@@ -290,8 +430,13 @@ private:
     // State
     nav_msgs::msg::Path current_path_;
     bool path_received_ = false;
-    bool goal_reached_ = false;
+    bool goal_reached_ = true;
+    double current_velocity_ = 0.0;
+    size_t last_path_segment_idx_ = 0;
+    bool is_moving_ = false;
 };
+
+// ...existing code...
 
 int main(int argc, char** argv)
 {

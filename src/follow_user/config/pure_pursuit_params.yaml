@@ -1,19 +1,34 @@
 pure_pursuit_controller:
   ros__parameters:
-    lookahead_dist: 1.0                      # Base lookahead distance
-    min_lookahead_dist: 0.5                  # Minimum lookahead distance
-    max_lookahead_dist: 1.5                  # Maximum lookahead distance
-    lookahead_time: 1.5                      # Time-based component for lookahead distance calculation
-    desired_linear_vel: 0.5                  # Desired linear velocity
+    # Lookahead Parameters
+    lookahead_dist: 0.8                      # Base lookahead distance (use this for low speeds). Now mostly superseded by lookahead_time.
+    min_lookahead_dist: 0.3                  # Minimum lookahead distance, for safety at low speeds/standstill.
+    max_lookahead_dist: 1.2                  # Maximum lookahead distance, prevents cutting corners too much.
+    lookahead_time: 1.5                      # Key parameter: lookahead distance = lookahead_time * current_speed. 1.5-2.0s is a good starting point.
+
+    # Velocity Parameters
+    desired_linear_vel: 0.20                 # Desired linear velocity. Should not exceed max_linear_vel.
+    max_linear_vel: 0.20                     # MODIFIED: Safety limit for max linear speed.
     max_angular_vel: 1.2                     # Maximum angular velocity
-    min_approach_linear_velocity: 0.05       # Minimum velocity when approaching the goal
-    approach_velocity_scaling_dist: 0.6      # Distance at which to start scaling down velocity when approaching the goal
+    min_approach_linear_velocity: 0.05       # Minimum velocity when approaching the goal.
+    approach_velocity_scaling_dist: 0.5      # Distance at which to start scaling down velocity when approaching the goal.
 
-    goal_dist_tol: 0.25                      # Goal tolerance in meters
+    # MODIFIED: Parameters for controlling turn-in-place vs. spiral behavior
+    # If heading error > this value (rad), robot will stop and rotate in-place.
+    heading_error_for_pure_rotation: 1.0 # 60 degrees
+    # If heading error < this value (rad), robot will use its full calculated speed.
+    # Between these two values, speed is scaled linearly to create a spiral.
+    min_heading_error_for_motion: 0.5  # 30 degrees
 
-    path_topic: "/follow_user/planned_path"  # Topic for the path
-    cmd_vel_topic: "/cmd_vel"                # Topic for velocity commands
-    base_frame: "base_link"                  # Robot's base frame
-    global_frame: "odom"                     # Global frame for localization
+    # Tolerances
+    goal_dist_tol: 0.15                      # Goal tolerance in meters. Reduce for better accuracy.
 
-    controller_frequency: 20.0               # Controller frequency in Hz
+    # Topics and Frames
+    path_topic: "/follow_user/planned_path"
+    odom_topic: "/slamware_ros_sdk_server_node/odom" # MODIFIED: Added odom topic
+    cmd_vel_topic: "/cmd_vel"
+    base_frame: "base_link"
+    global_frame: "slamware_map"
+
+    # Controller Settings
+    controller_frequency: 20.0

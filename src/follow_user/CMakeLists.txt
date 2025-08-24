@@ -15,6 +15,7 @@ find_package(nav_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
+find_package(angles REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(action_msgs REQUIRED)
 
@@ -33,6 +34,7 @@ ament_target_dependencies(pure_pursuit_controller
   tf2
   tf2_ros
   tf2_geometry_msgs
+  angles
 )
 
 # Install targets
