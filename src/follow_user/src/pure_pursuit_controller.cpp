@@ -1,4 +1,3 @@
-// MODIFICATION START: Added new headers and utilities
 #include <rclcpp/rclcpp.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <nav_msgs/msg/odometry.hpp>
@@ -15,8 +14,9 @@
 #include <memory>
 #include <vector>
 #include <limits>
+#include <mutex>
+#include <optional>
 #include <angles/angles.h>
-// MODIFICATION END
 
 class PurePursuitController : public rclcpp::Node
 {
@@ -31,10 +31,8 @@ public:
         this->declare_parameter("desired_linear_vel", 0.5);
         this->declare_parameter("max_linear_vel", 0.20); 
         this->declare_parameter("max_angular_vel", 1.2);
-        // MODIFICATION START: New parameters for smooth turning
         this->declare_parameter("heading_error_for_pure_rotation", 1.57); // 90 degrees
         this->declare_parameter("min_heading_error_for_motion", 0.35); // 20 degrees
-        // MODIFICATION END
         this->declare_parameter("min_approach_linear_velocity", 0.05);
         this->declare_parameter("approach_velocity_scaling_dist", 0.6);
         this->declare_parameter("goal_dist_tol", 0.25);
@@ -42,11 +40,8 @@ public:
         this->declare_parameter("odom_topic", "/slamware_ros_sdk_server_node/odom");
         this->declare_parameter("cmd_vel_topic", "/cmd_vel");
         this->declare_parameter("base_frame", "base_link");
-        this->declare_parameter("global_frame", "odom");
+        this->declare_parameter("global_frame", "odom");  // Change to slamware_map
         this->declare_parameter("controller_frequency", 20.0);
-        // MODIFICATION START: New parameter for turn-then-go behavior
-        this->declare_parameter("max_heading_error_for_motion", M_PI / 4.0); // 45 degrees
-        // MODIFICATION END
 
         // Get parameters
         lookahead_dist_ = this->get_parameter("lookahead_dist").as_double();
@@ -56,24 +51,17 @@ public:
         desired_linear_vel_ = this->get_parameter("desired_linear_vel").as_double();
         max_linear_vel_ = this->get_parameter("max_linear_vel").as_double();
         max_angular_vel_ = this->get_parameter("max_angular_vel").as_double();
-        // MODIFICATION START: Get new parameters
         heading_error_for_pure_rotation_ = this->get_parameter("heading_error_for_pure_rotation").as_double();
         min_heading_error_for_motion_ = this->get_parameter("min_heading_error_for_motion").as_double();
-        // MODIFICATION END
         min_approach_linear_velocity_ = this->get_parameter("min_approach_linear_velocity").as_double();
         approach_velocity_scaling_dist_ = this->get_parameter("approach_velocity_scaling_dist").as_double();
         goal_dist_tol_ = this->get_parameter("goal_dist_tol").as_double();
         path_topic_ = this->get_parameter("path_topic").as_string();
-        // FIX START: Use member variable odom_topic_ for consistency
         odom_topic_ = this->get_parameter("odom_topic").as_string();
-        // FIX END
         cmd_vel_topic_ = this->get_parameter("cmd_vel_topic").as_string();
         base_frame_ = this->get_parameter("base_frame").as_string();
         global_frame_ = this->get_parameter("global_frame").as_string();
         double controller_frequency = this->get_parameter("controller_frequency").as_double();
-        // MODIFICATION START: Get new parameter
-        max_heading_error_for_motion_ = this->get_parameter("max_heading_error_for_motion").as_double();
-        // MODIFICATION END
 
         // Publishers and subscribers
         path_sub_ = this->create_subscription<nav_msgs::msg::Path>(
@@ -111,7 +99,10 @@ private:
     
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
     {
-        current_velocity_ = msg->twist.twist.linear.x;
+    current_velocity_ = msg->twist.twist.linear.x;
+    // Cache latest odometry pose for fallback when TF lookup fails
+    std::lock_guard<std::mutex> lock(odom_mutex_);
+    latest_odom_ = *msg;
     }
 
     void controlLoop()
@@ -158,7 +149,7 @@ private:
             return cmd_vel; 
         }
 
-        // MODIFICATION START: Implement "turn-then-go" logic
+        // Implement "turn-then-go" logic
         // Calculate the angle to the lookahead point (carrot)
         double angle_to_carrot_global = atan2(
             carrot_pose.pose.position.y - robot_pose.pose.position.y,
@@ -170,7 +161,7 @@ private:
         // Calculate the heading error
         double heading_error = angles::normalize_angle(angle_to_carrot_global - robot_yaw);
         
-        // MODIFICATION START: Implement smooth, scaled turning
+        // Implement smooth, scaled turning
         double linear_vel = calculateSpeed(robot_pose);
         double speed_scale = 1.0;
         if (std::abs(heading_error) > heading_error_for_pure_rotation_) {
@@ -184,7 +175,6 @@ private:
         }
         
         linear_vel *= speed_scale;
-        // MODIFICATION END
         
         // The rest of the pure pursuit logic for calculating angular velocity
         double angle_to_carrot_robot_frame = 0.0;
@@ -192,13 +182,12 @@ private:
             geometry_msgs::msg::PoseStamped carrot_in_robot_frame;
             if (!transformPose(base_frame_, carrot_pose, carrot_in_robot_frame)) {
                 RCLCPP_WARN(this->get_logger(), "Could not transform lookahead point to robot frame. Stopping.");
-                // Return zero velocity if transform fails
-                return geometry_msgs::msg::Twist();
+                return cmd_vel; // zero velocity
             }
             angle_to_carrot_robot_frame = atan2(carrot_in_robot_frame.pose.position.y, carrot_in_robot_frame.pose.position.x);
         } catch (const tf2::TransformException& ex) {
             RCLCPP_ERROR(this->get_logger(), "Could not transform lookahead point: %s", ex.what());
-            return cmd_vel;
+            return cmd_vel; // zero velocity
         }
 
         // If we are only rotating, use a simple proportional controller on heading error
@@ -246,6 +235,7 @@ private:
         size_t closest_segment_idx = findClosestPathSegment(robot_pose, last_path_segment_idx_);
         last_path_segment_idx_ = closest_segment_idx;
 
+        bool found_lookahead = false;
         for (size_t i = closest_segment_idx; i < current_path_.poses.size() - 1; ++i) {
             auto& p1 = current_path_.poses[i].pose.position;
             auto& p2 = current_path_.poses[i+1].pose.position;
@@ -257,18 +247,29 @@ private:
                 lookahead_point.pose.position.x = intersection.x;
                 lookahead_point.pose.position.y = intersection.y;
                 lookahead_point.pose.orientation.w = 1.0;
+                lookahead_point.pose.orientation.x = 0.0;
+                lookahead_point.pose.orientation.y = 0.0;
+                lookahead_point.pose.orientation.z = 0.0;
+                found_lookahead = true;
                 carrot_pub_->publish(lookahead_point);
                 return true;
             }
         }
 
-        double dist_to_last_point = std::hypot(
-            robot_pose.pose.position.x - current_path_.poses.back().pose.position.x,
-            robot_pose.pose.position.y - current_path_.poses.back().pose.position.y
-        );
-
-        if (dist_to_last_point <= lookahead_dist + goal_dist_tol_) {
-            lookahead_point = current_path_.poses.back();
+        if (!found_lookahead) {
+            double dist_to_last_point = std::hypot(
+                robot_pose.pose.position.x - current_path_.poses.back().pose.position.x,
+                robot_pose.pose.position.y - current_path_.poses.back().pose.position.y
+            );
+            if (dist_to_last_point <= lookahead_dist + goal_dist_tol_) {
+                lookahead_point.pose = current_path_.poses.back().pose;
+                found_lookahead = true;
+            }
+        }
+        
+        if (found_lookahead) {
+            lookahead_point.header.frame_id = current_path_.header.frame_id;
+            lookahead_point.header.stamp = this->get_clock()->now();
             carrot_pub_->publish(lookahead_point);
             return true;
         }
@@ -339,39 +340,57 @@ private:
     
     bool getRobotPose(geometry_msgs::msg::PoseStamped& robot_pose)
     {
+        geometry_msgs::msg::TransformStamped transform;
         try {
-            geometry_msgs::msg::TransformStamped transform = tf_buffer_.lookupTransform(
-                global_frame_, base_frame_, tf2::TimePointZero, std::chrono::seconds(1));
-            
-            robot_pose.header.stamp = this->now();
+            // Request the latest transform available. This may throw if the buffer
+            // does not have any transform for the requested frames/time.
+            transform = tf_buffer_.lookupTransform(
+                global_frame_, base_frame_, tf2::TimePointZero, std::chrono::milliseconds(500));
+
+            robot_pose.header.stamp = transform.header.stamp;
             robot_pose.header.frame_id = global_frame_;
             robot_pose.pose.position.x = transform.transform.translation.x;
             robot_pose.pose.position.y = transform.transform.translation.y;
             robot_pose.pose.position.z = transform.transform.translation.z;
-            // FIX START: Correctly access the 'pose' member before 'orientation'
             robot_pose.pose.orientation = transform.transform.rotation;
-            // FIX END
-            
             return true;
         } catch (tf2::TransformException& ex) {
-            RCLCPP_ERROR(this->get_logger(), "Transform lookup from %s to %s failed: %s", 
-                global_frame_.c_str(), base_frame_.c_str(), ex.what());
+            // If the error is extrapolation (timestamps), try to fallback to latest
+            // transform available in the buffer by asking for the latest common time.
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                                "Could not get robot pose from TF: %s -- attempting odom fallback", ex.what());
+
+            // Try to use the most recent odometry message we have received as a fallback.
+            std::lock_guard<std::mutex> lock(odom_mutex_);
+            if (latest_odom_.has_value()) {
+                const auto& odom = latest_odom_.value();
+                robot_pose.header.stamp = odom.header.stamp;
+                robot_pose.header.frame_id = odom.header.frame_id;
+                robot_pose.pose = odom.pose.pose;
+                return true;
+            }
+
             return false;
         }
     }
 
-    bool transformPose(const std::string& frame, const geometry_msgs::msg::PoseStamped& in_pose,
-                       geometry_msgs::msg::PoseStamped& out_pose)
+    bool transformPose(const std::string& target_frame, const geometry_msgs::msg::PoseStamped& in_pose,
+                        geometry_msgs::msg::PoseStamped& out_pose)
     {
-        if (in_pose.header.frame_id == frame) {
+        if (in_pose.header.frame_id == target_frame) {
             out_pose = in_pose;
             return true;
         }
         try {
-            tf_buffer_.transform(in_pose, out_pose, frame, std::chrono::milliseconds(500));
+            // Ask for the LATEST available transform
+            geometry_msgs::msg::TransformStamped transform = tf_buffer_.lookupTransform(
+                target_frame, in_pose.header.frame_id, tf2::TimePointZero, std::chrono::milliseconds(500));
+            tf2::doTransform(in_pose, out_pose, transform);
+            out_pose.header.stamp = transform.header.stamp; // Ensure timestamp is consistent
             return true;
-        } catch (tf2::TransformException & ex) {
-            RCLCPP_ERROR(this->get_logger(), "Exception in transformPose to frame %s: %s", frame.c_str(), ex.what());
+
+        } catch (const tf2::TransformException & ex) {
+            RCLCPP_ERROR(this->get_logger(), "Exception in transformPose: %s", ex.what());
         }
         return false;
     }
@@ -405,15 +424,10 @@ private:
     double approach_velocity_scaling_dist_;
     double goal_dist_tol_;
     std::string path_topic_;
-    // FIX START: Use member variable for consistency
     std::string odom_topic_;
-    // FIX END
     std::string cmd_vel_topic_;
     std::string base_frame_;
     std::string global_frame_;
-    // MODIFICATION START
-    double max_heading_error_for_motion_;
-    // MODIFICATION END
     double heading_error_for_pure_rotation_;
     double min_heading_error_for_motion_;
     
@@ -434,9 +448,10 @@ private:
     double current_velocity_ = 0.0;
     size_t last_path_segment_idx_ = 0;
     bool is_moving_ = false;
+    // Odom cache for TF fallback
+    std::mutex odom_mutex_;
+    std::optional<nav_msgs::msg::Odometry> latest_odom_;
 };
-
-// ...existing code...
 
 int main(int argc, char** argv)
 {

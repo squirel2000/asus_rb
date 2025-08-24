@@ -7,8 +7,8 @@ pure_pursuit_controller:
     lookahead_time: 1.5                      # Key parameter: lookahead distance = lookahead_time * current_speed. 1.5-2.0s is a good starting point.
 
     # Velocity Parameters
-    desired_linear_vel: 0.20                 # Desired linear velocity. Should not exceed max_linear_vel.
-    max_linear_vel: 0.20                     # MODIFIED: Safety limit for max linear speed.
+    desired_linear_vel: 0.50                 # Desired linear velocity. Should not exceed max_linear_vel.
+    max_linear_vel: 0.70                     # MODIFIED: Safety limit for max linear speed.
     max_angular_vel: 1.2                     # Maximum angular velocity
     min_approach_linear_velocity: 0.05       # Minimum velocity when approaching the goal.
     approach_velocity_scaling_dist: 0.5      # Distance at which to start scaling down velocity when approaching the goal.

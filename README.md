@@ -96,3 +96,18 @@ To update the goal mid-task while the robot is still navigating to the first poi
     ```bash
     ros2 run task_coordinator task_client.py follow user_123
     ```
+
+#### Launch the pure pursuit controller directly (for testing)
+
+The follow-user task will subscribe to the `/clicked_point` topic as the goal point to follow, request the path to the goal point using slamtec SDK `api/core/motion/v1/:search_path`, and publish the `follow_user/planned_path` topic, which is subscribed by the pure pursuit controller to follow the path.
+
+
+* Subscribe to `/clicked_point` in RViz2 and publish the path to `follow_user/planned_path`
+    ```bash
+    python3 src/follow_user/scripts/search_path_client.py
+    ```
+
+* Subscribe to `follow_user/planned_path` and publish velocity commands to `cmd_vel` 
+    ```bash
+    ros2 launch follow_user pure_pursuit.launch.py
+    ```
