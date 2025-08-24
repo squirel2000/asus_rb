@@ -1,0 +1,19 @@
+pure_pursuit_controller:
+  ros__parameters:
+    lookahead_dist: 1.0                      # Base lookahead distance
+    min_lookahead_dist: 0.5                  # Minimum lookahead distance
+    max_lookahead_dist: 1.5                  # Maximum lookahead distance
+    lookahead_time: 1.5                      # Time-based component for lookahead distance calculation
+    desired_linear_vel: 0.5                  # Desired linear velocity
+    max_angular_vel: 1.2                     # Maximum angular velocity
+    min_approach_linear_velocity: 0.05       # Minimum velocity when approaching the goal
+    approach_velocity_scaling_dist: 0.6      # Distance at which to start scaling down velocity when approaching the goal
+
+    goal_dist_tol: 0.25                      # Goal tolerance in meters
+
+    path_topic: "/follow_user/planned_path"  # Topic for the path
+    cmd_vel_topic: "/cmd_vel"                # Topic for velocity commands
+    base_frame: "base_link"                  # Robot's base frame
+    global_frame: "odom"                     # Global frame for localization
+
+    controller_frequency: 20.0               # Controller frequency in Hz

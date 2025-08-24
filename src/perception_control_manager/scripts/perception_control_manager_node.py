@@ -12,6 +12,10 @@ from perception_control_manager.srv import CreateNavigation, GetActionStatus
 ROBOT_API_IP = '127.0.0.1'
 ROBOT_API_PORT = 1448
 
+# Examples:
+# asus@asus-4070:~/Gits/asus_rb/rb_amr$ curl -X GET http://192.168.12.1:1448/api/core/system/v1/power/status
+# {"batteryPercentage":86,"dockingStatus":"not_on_dock","isCharging":false,"isDCConnected":false,"powerStage":"running","sleepMode":"awake"}
+
 class PerceptionControlManagerNode(Node):
     def __init__(self):
         super().__init__('perception_control_manager_node')

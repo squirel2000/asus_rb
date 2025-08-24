@@ -3,7 +3,7 @@
 <package format="3">
   <name>follow_user</name>
   <version>0.0.0</version>
-  <description>A ROS2 package to make a TurtleBot3 follow a user.</description>
+  <description>A ROS2 package to make a TurtleBot3 follow a user using a simple pure pursuit path following controller.</description>
   <maintainer email="tingying.wu@gmail.com">asus</maintainer>
   <license>Apache-2.0</license>
 
@@ -16,9 +16,13 @@
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>cv_bridge</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
 
   <build_depend>action_msgs</build_depend>
-  <build_depend>geometry_msgs</build_depend>
 
 
   <!-- Needed for custom action/msg/srv generation -->
