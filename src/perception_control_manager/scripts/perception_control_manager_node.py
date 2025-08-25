@@ -47,7 +47,7 @@ class PerceptionControlManagerNode(Node):
         self.set_max_speed_service = self.create_service(
             SetMaxSpeed, 'set_max_speed', self.set_max_speed_callback)
         self.set_emergency_brake = self.create_service(
-            SetBool, 'set_emergency_brake', self.set_emergency_brake_callback)
+            SetBool, 'emergency_stop', self.set_emergency_stop_callback)
 
         print('Perception Control Manager Node has been started.')
         print('Publishers:')
@@ -78,12 +78,12 @@ class PerceptionControlManagerNode(Node):
         response.success = result_move and result_ang
         return response
     
-    def set_emergency_brake_callback(self, request, response):
+    def set_emergency_stop_callback(self, request, response):
 
-        self.get_logger().info(f"Set emergency brake: {request.data}")
+        self.get_logger().info(f"Set emergency stop: {request.data}")
 
-        brake = "on" if request.data else "off"
-        result = self.api.set_emergency_brake(value= brake)
+        stop = "on" if request.data else "off"
+        result = self.api.set_emergency_stop(value= stop)
         
         response.success = result
         return response
