@@ -87,7 +87,7 @@ def main(args=None):
     
     # Create a sample goal pose (e.g., x=1.0, y=2.0, yaw=90 degrees)
     # IMPORTANT: Change these coordinates to a valid location in your map
-    target_pose = create_pose_stamped(action_client, 1.0, 2.0, math.pi / 2.0)
+    target_pose = create_pose_stamped(action_client, 0.0, 0.0, math.pi / 2.0)
     
     action_client.send_goal(target_pose)
     

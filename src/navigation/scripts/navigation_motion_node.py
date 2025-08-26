@@ -37,7 +37,6 @@ class NavigateActionServer(Node):
 
         # Subscription to the current pose for feedback
         self.current_pose = None
-        self.last_pose = None  # Used to detect if the robot is stuck
         self.pose_subscriber = self.create_subscription(PoseStamped, '/robot_pose', self.current_pose_callback, 10, callback_group=self.callback_group)
         
         # Subscription to the AMR's remaining target points
@@ -61,7 +60,7 @@ class NavigateActionServer(Node):
         # Declare ROS parameters with default values
         self.declare_parameter('success_distance_threshold', 0.1)  # Position distance threshold (meters)
         self.declare_parameter('success_yaw_threshold', 0.1)       # Yaw angle threshold (radians, ~5.7 degrees)
-        self.declare_parameter('stuck_timeout_sec', 30.0)          # Stuck timeout duration (seconds)
+        self.declare_parameter('stuck_timeout_sec', 20.0)          # Stuck timeout duration (seconds)
         self.declare_parameter('stuck_distance_threshold', 0.05)   # Stuck detection distance threshold (meters)
 
         # Get parameter values
@@ -211,20 +210,32 @@ class NavigateActionServer(Node):
         self.publish_move_to(target_pose, speed_ratio)
         
         # Confirm the AMR has received the action and the target point exists
+        _last_move_time = self.get_clock().now()
+        _waiting_timeout = self.stuck_timeout_sec/2
         while rclpy.ok() and not self.remaining_targets:
-            self.get_logger().info('Waiting for get AMR remaining target points.')
-            await self.ros_async_sleep(0.1)
+            self.get_logger().warn('Waiting for get AMR remaining target points.')
+
+            if (self.get_clock().now() - _last_move_time).nanoseconds / 1e9 > _waiting_timeout:
+                self.get_logger().error(
+                    f"Waiting for the AMR remaining target for {_waiting_timeout} seconds."
+                )
+                self.get_logger().info("Goal aborted due to unavailability of AMR remaining target points.")
+                self.publish_cancel()
+                goal_handle.abort()
+                result.success = False
+                return result
+            await self.ros_async_sleep(0.2)
 
         self.get_logger().info('Executing goal...')
         # Monitor the action status
-        last_move_time = self.get_clock().now()
-        self.last_pose = self.current_pose
+        _last_move_time = self.get_clock().now()
+        _last_pose = self.current_pose
 
         while rclpy.ok():
             # Check if robot is stuck
-            if self.current_pose and self.last_pose:
-                if self._is_stuck(self.current_pose, self.last_pose):
-                    if (self.get_clock().now() - last_move_time).nanoseconds / 1e9 > self.stuck_timeout_sec:
+            if self.current_pose and _last_pose:
+                if self._is_stuck(self.current_pose, _last_pose):
+                    if (self.get_clock().now() - _last_move_time).nanoseconds / 1e9 > self.stuck_timeout_sec:
                         self.get_logger().error(
                             f"Robot stuck for {self.stuck_timeout_sec} seconds at position "
                             f"(x={self.current_pose.pose.position.x:.2f}, y={self.current_pose.pose.position.y:.2f})"
@@ -235,8 +246,8 @@ class NavigateActionServer(Node):
                         result.success = False
                         return result
                 else:
-                    last_move_time = self.get_clock().now()
-                    self.last_pose = self.current_pose
+                    _last_move_time = self.get_clock().now()
+                    _last_pose = self.current_pose
 
             if goal_handle.is_cancel_requested:
                 self.publish_cancel()
@@ -264,6 +275,10 @@ class NavigateActionServer(Node):
                         result.success = False
                         return result
                     
+            # reset pose to none until new msg is posted
+            self.current_pose = None
+            self.remaining_targets = None
+
             # Use non-blocking ROS-native sleep
             await self.ros_async_sleep(0.1)
 

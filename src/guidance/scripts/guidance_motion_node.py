@@ -330,9 +330,22 @@ class GuidanceActionServer(Node):
         self.publish_move_to(target_pose, self._speed_ratio)
         
         # Confirm the AMR has received the action and the target point exists
+        _last_move_time = self.get_clock().now()
+        _waiting_timeout = self.stuck_timeout_sec/2
         while rclpy.ok() and not self.remaining_targets:
-            self.get_logger().info('Waiting for get AMR remaining target points.')
-            await self.ros_async_sleep(0.1)
+            self.get_logger().warn('Waiting for get AMR remaining target points.')
+
+            if (self.get_clock().now() - _last_move_time).nanoseconds / 1e9 > _waiting_timeout:
+                self.get_logger().error(
+                    f"Waiting for the AMR remaining target for {_waiting_timeout} seconds."
+                )
+                self.get_logger().info("Goal aborted due to unavailability of AMR remaining target points.")
+                self.publish_cancel()
+                goal_handle.abort()
+                result.success = False
+                return result
+            await self.ros_async_sleep(0.2)
+
         self.get_logger().info('Executing guidance goal...')
 
         # Initialize state
@@ -374,7 +387,6 @@ class GuidanceActionServer(Node):
 
             # Calculate human distance and publish feedback
             human_distance = self._get_human_distance(self.human_relative_pose)
-            self.human_relative_pose = None # reset pose to none until new pose is posted
 
             # Adjust speed and handle human lost
             guiding_stage = await self._adjust_speed_and_handle_lost(human_distance)
@@ -417,6 +429,11 @@ class GuidanceActionServer(Node):
                     goal_handle.abort()
                     result.success = False
                     return result
+
+            # reset pose to none until new msg is posted
+            self.human_relative_pose = None 
+            self.current_pose = None
+            self.remaining_targets = None
 
             await self.ros_async_sleep(0.1)
 
