@@ -129,7 +129,7 @@ class PerceptionControlManagerNode(Node):
     
     def publish_remaining_targets(self):
         data = self.api.get_remaining_targets()
-        if data:
+        if data is not None:
             points = data['path_points']
             msg = Float32MultiArray()
             # Define 2D array layout
@@ -155,12 +155,12 @@ class PerceptionControlManagerNode(Node):
     def publish_amr_status(self):
         health = self.api.get_health()
         events = self.api.get_events()
-
-        msg = String(data = str(health))
-        self.amr_health_publisher.publish(msg)
-
-        msg = String(data = str(events))
-        self.amr_events_publisher.publish(msg)
+        if health is not None:
+            msg = String(data = str(health))
+            self.amr_health_publisher.publish(msg)
+        if events is not None:
+            msg = String(data = str(events))
+            self.amr_events_publisher.publish(msg)
 
 
 def main(args=None):

@@ -5,6 +5,7 @@ string user_id
 ---
 # Result
 bool success
+string message
 ---
 # Feedback
 string status

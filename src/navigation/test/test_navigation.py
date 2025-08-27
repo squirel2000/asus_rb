@@ -70,14 +70,16 @@ class NavigateActionClient(Node):
     def get_result_callback(self, future):
         """Callback for when the action is finished."""
         result = future.result().result
-        self.get_logger().info(f'Result: {{success: {result.success}}}')
+        self.get_logger().info(f'Result: {{success: {result.success}, message: {result.message}}}')
         rclpy.shutdown()
 
     def feedback_callback(self, feedback_msg):
         """Callback for receiving feedback from the action server."""
         pose = feedback_msg.feedback.current_pose
+        status = feedback_msg.feedback.status
         self.get_logger().info(
             f'Received feedback: Current Pose: x={pose.pose.position.x:.2f}, y={pose.pose.position.y:.2f}'
+            f'Received feedback: Current Status: {status}'
         )
 
 def main(args=None):
