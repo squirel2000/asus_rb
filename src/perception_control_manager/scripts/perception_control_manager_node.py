@@ -94,6 +94,7 @@ class PerceptionControlManagerNode(Node):
             "action_name": "slamtec.agent.actions.GoHomeAction",
             "options": {
                 "gohome_options": {
+                    "flags": "dock", # ["dock", "no_dock"]
                     "charging_retry_count": 1,
                 }
             }
@@ -119,7 +120,9 @@ class PerceptionControlManagerNode(Node):
             "action_name": "slamtec.agent.actions.RecoverLocalizationAction",
             "options": {
                 "area":{},
-                "relocalization_options": {}
+                "relocalization_options": {
+                    "recover_movement_type": "RotateOnly", # ["RotateOnly", "NoMove"]
+                }
             }
         }
         action_id = self.api.create_actions(payload)

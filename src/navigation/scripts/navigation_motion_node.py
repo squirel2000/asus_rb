@@ -257,6 +257,16 @@ class NavigateActionServer(Node):
         
         return status
 
+    def _abort_goal(self, goal_handle, message: str):
+        """Helper method to abort the goal with a specific message."""
+        self.publish_cancel()
+        goal_handle.abort()
+        result = Navigate.Result()
+        result.success = False
+        result.message = message
+        self.get_logger().info(result.message)
+        return result
+    
     async def execute_callback(self, goal_handle):
         """Executes the navigation action by publishing to slamware_ros_sdk topics."""
         target_pose = goal_handle.request.target_pose
@@ -298,11 +308,7 @@ class NavigateActionServer(Node):
             
             if (self.get_clock().now() - _last_move_time).nanoseconds / 1e9 > _waiting_timeout:
                 self.get_logger().error(timeout_message)
-
-                self.publish_cancel()
-                goal_handle.abort()
-                result.success = False
-                self.get_logger().info(result.message)
+                result = self._abort_goal(goal_handle, result.message)
                 return result
             
             await self.ros_async_sleep(0.2)
@@ -325,19 +331,12 @@ class NavigateActionServer(Node):
             """Safety prevention"""
             if current_state == "DEVICE_ERROR_DETECTED":
                 self.get_logger().error(f"Device error detected on the AMR!")
-                self.publish_cancel()
-                goal_handle.abort()
-                result.success = False
-                result.message = "Goal aborted due to a device error on the AMR."
-                self.get_logger().info(result.message)
+                result = self._abort_goal(goal_handle, "Goal aborted due to a device error on the AMR.")
                 return result
+            
             elif current_state == "COLLISION_DETECTED_BY_BUMPER":
                 self.get_logger().warn(f"collision detected by the bumper!")
-                self.publish_cancel()
-                goal_handle.abort()
-                result.success = False
-                result.message = "Goal aborted due to a collision detected by the AMR's bumper."
-                self.get_logger().info(result.message)
+                result = self._abort_goal(goal_handle, "Goal aborted due to a collision detected by the AMR's bumper.")
                 return result
 
 
@@ -348,17 +347,14 @@ class NavigateActionServer(Node):
                         f"Robot stuck for {self.stuck_timeout_sec} seconds at position "
                         f"(x={self.current_pose.pose.position.x:.2f}, y={self.current_pose.pose.position.y:.2f})"
                     )
-                    self.publish_cancel()
-                    goal_handle.abort()
-                    result.success = False
-                    result.message = "Goal aborted because the AMR failed to find a valid path and got stuck."
-                    self.get_logger().info(result.message)
+
+                    result = self._abort_goal(goal_handle, "Goal aborted because the AMR failed to find a valid path and got stuck.")
                     return result
             else:
                 _last_move_time = self.get_clock().now()
                 _last_pose = self.current_pose
 
-            """Cancel the action"""
+            """Check for cancel request"""
             if goal_handle.is_cancel_requested:
                 self.publish_cancel()
                 goal_handle.canceled()
@@ -377,25 +373,17 @@ class NavigateActionServer(Node):
                     self.get_logger().info(result.message)
                     return result
                 else: # AMR action is done but did not meet threshold criteria
-                    goal_handle.abort()
-                    result.success = False
-                    result.message = "Goal aborted because the MoveTo action completed but the target pose was not reached."
-                    self.get_logger().info(result.message)
+                    result = self._abort_goal(goal_handle, "Goal aborted because the MoveTo action completed but the target pose was not reached.")
                     return result
             
-            # reset pose to none until new msg is posted
+            # Reset pose to none until new msg is posted
             self.current_pose = None
 
             # Use non-blocking ROS-native sleep
             await self.ros_async_sleep(0.1)
 
         self.get_logger().info("RCLPY shutdown, aborting goal.")
-        self.publish_cancel()
-        goal_handle.abort()
-        result.success = False
-        result.message = "Goal aborted due to RCLPY shutdown."
-        self.get_logger().info(result.message)
-        return result
+        return await self._abort_goal(goal_handle, "Goal aborted due to RCLPY shutdown.")
 
 def main(args=None):
     rclpy.init(args=args)

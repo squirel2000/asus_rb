@@ -78,8 +78,10 @@ class GuidanceActionClient(Node):
     def feedback_callback(self, feedback_msg):
         """Callback for receiving feedback from the action server."""
         pose = feedback_msg.feedback.current_pose
+        status = feedback_msg.feedback.status
         self.get_logger().info(
             f'Received feedback: Current Pose: x={pose.pose.position.x:.2f}, y={pose.pose.position.y:.2f}'
+            f'Received feedback: Current Status: {status}'
         )
 
 def main(args=None):
