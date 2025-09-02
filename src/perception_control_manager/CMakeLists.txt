@@ -4,19 +4,18 @@ project(perception_control_manager)
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
-find_package(geometry_msgs REQUIRED)
+find_package(slamware_ros_sdk REQUIRED)
 find_package(rclpy REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "srv/CreateNavigation.srv"
   "srv/GetActionStatus.srv"
+  "srv/CreateMoveTo.srv"
   "srv/SetMaxSpeed.srv"
-  DEPENDENCIES geometry_msgs
+  DEPENDENCIES slamware_ros_sdk
 )
 
 install(PROGRAMS
   scripts/perception_control_manager_node.py
-  scripts/perception_control_manager_mock_api_server.py
   DESTINATION lib/${PROJECT_NAME})
 
 

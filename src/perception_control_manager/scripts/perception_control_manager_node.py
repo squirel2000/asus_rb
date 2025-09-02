@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-from geometry_msgs.msg import PoseStamped
-from sensor_msgs.msg import LaserScan
+from rclpy.clock import Clock
 from std_srvs.srv import Trigger, SetBool
 from utils.restful_api import RestfulAPI
-from perception_control_manager.srv import CreateNavigation, GetActionStatus, SetMaxSpeed
+from perception_control_manager.srv import GetActionStatus, SetMaxSpeed, CreateMoveTo
 from std_msgs.msg import String, Float32MultiArray, MultiArrayDimension
 
 # slamtec https://bucket-download.slamtec.com/df3d216e95439541c6f0fafb5ad8dd61d1865a78/AM201_SLAMTEC_Apollo2.0_usermanual_A5M31_v1_en_0613.pdf
@@ -30,43 +29,115 @@ class PerceptionControlManagerNode(Node):
         self.amr_events_publisher = self.create_publisher(String, 'amr_events', 10)
         self.info_timer = self.create_timer(0.2, self.publish_amr_status) # 5 Hz
 
-        """self.current_pose_publisher = self.create_publisher(PoseStamped, 'current_pose', 10)
-        self.pose_timer = self.create_timer(0.04, self.publish_current_pose) # 25 Hz
+        self.current_action_publisher = self.create_publisher(String, 'current_action', 10)
+        self.action_timer = self.create_timer(0.2, self.publish_current_action) # 5 Hz
 
-        self.laser_scan_publisher = self.create_publisher(LaserScan, 'laser_scan', 10)
-        self.laser_scan_timer = self.create_timer(0.04, self.publish_laser_scan) # 25 Hz
-
-        # Control Services
-        self.create_nav_service = self.create_service(
-            CreateNavigation, 'create_navigation', self.create_navigation_callback)
+        
+        # Services
         self.get_status_service = self.create_service(
             GetActionStatus, 'get_action_status', self.get_action_status_callback)
         self.cancel_action_service = self.create_service(
-            Trigger, 'cancel_action', self.cancel_action_callback)"""
+            Trigger, 'cancel_action', self.cancel_action_callback)
+
+        self.create_move_to_service = self.create_service(
+            CreateMoveTo, 'create_move_to', self.create_move_to_callback)
+        self.create_go_home_service = self.create_service(
+            Trigger, 'create_go_home', self.create_go_home_callback)
+        self.set_relocalization_service = self.create_service(
+            Trigger, 'set_relocalization', self.set_relocalization_callback)
         
         self.set_max_speed_service = self.create_service(
             SetMaxSpeed, 'set_max_speed', self.set_max_speed_callback)
         self.set_emergency_brake = self.create_service(
             SetBool, 'emergency_stop', self.set_emergency_stop_callback)
 
-        print('Perception Control Manager Node has been started.')
-        print('Publishers:')
-        print(f'  - {self.remaining_targets_publisher.topic} ({self.remaining_targets_publisher.msg_type.__name__}) at {1.0/self.timer.timer_period_ns * 1e9:.2f} Hz')
-        print(f'  - {self.amr_health_publisher.topic} ({self.amr_health_publisher.msg_type.__name__}) at {1.0/self.info_timer.timer_period_ns * 1e9:.2f} Hz')
-        print(f'  - {self.amr_events_publisher.topic} ({self.amr_events_publisher.msg_type.__name__}) at {1.0/self.info_timer.timer_period_ns * 1e9:.2f} Hz')
 
-        #print(f'  - {self.current_pose_publisher.topic} ({self.current_pose_publisher.msg_type.__name__}) at {1.0/self.pose_timer.timer_period_ns * 1e9:.2f} Hz')
-        #print(f'  - {self.laser_scan_publisher.topic} ({self.laser_scan_publisher.msg_type.__name__}) at {1.0/self.laser_scan_timer.timer_period_ns * 1e9:.2f} Hz')
-        
-        print('Services:')
-        print(f'  - {self.set_max_speed_service.srv_name} ({self.set_max_speed_service.srv_type.__name__})')
-        print(f'  - {self.set_emergency_brake.srv_name} ({self.set_emergency_brake.srv_type.__name__})')
+        self.clock = Clock()
 
-        #print(f'  - {self.create_nav_service.srv_name} ({self.create_nav_service.srv_type.__name__})')
-        #print(f'  - {self.get_status_service.srv_name} ({self.get_status_service.srv_type.__name__})')
-        #print(f'  - {self.cancel_action_service.srv_name} ({self.cancel_action_service.srv_type.__name__})')
+    def delay(self, seconds):
+        start_time = self.clock.now()
+        end_time = start_time + rclpy.duration.Duration(seconds=seconds)
+        while self.clock.now() < end_time and rclpy.ok():
+            rclpy.spin_once(self, timeout_sec=0.01)
 
     # Service Callbacks
+    def create_move_to_callback(self, request, response):
+        payload = {
+            "action_name": "slamtec.agent.actions.MoveToAction",
+            "options": {
+                "target": {
+                    "x": request.target.location.x,
+                    "y": request.target.location.y,
+                },
+                "move_options": {
+                    "mode": 0,
+                    "yaw": request.target.yaw,
+                    "speed_ratio": request.target.options.speed_ratio.value,
+                    "flags": ['with_yaw','precise']
+                }
+            }
+        }
+        action_id = self.api.create_actions(payload)
+
+        if action_id:
+            self.delay(0.2)
+            action_status = self.api.get_action_status(action_id).get("state")
+            response.success = True if action_status.get("result") == 0 else False
+            response.action_id = action_id
+        else:
+            response.success = False
+            response.action_id = ""
+        return response
+    
+    def create_go_home_callback(self, request, response):
+        payload = {
+            "action_name": "slamtec.agent.actions.GoHomeAction",
+            "options": {
+                "gohome_options": {
+                    "charging_retry_count": 1,
+                }
+            }
+        }
+        action_id = self.api.create_actions(payload)
+
+        if action_id:
+            self.delay(0.2)
+            action_status = self.api.get_action_status(action_id).get("state")
+            if action_status.get("result") == 0:
+                response.success = True
+                response.message = f"The AMR is navigating to home, action ID:{action_id}"
+            else:
+                response.success = False 
+                response.message = f"The GoHomeAction failed to execute, action ID:{action_id}"
+        else:
+            response.success = False
+            response.message = "Failed to send POST request for the GoHomeAction."
+        return response
+
+    def set_relocalization_callback(self, request, response):
+        payload = {
+            "action_name": "slamtec.agent.actions.RecoverLocalizationAction",
+            "options": {
+                "area":{},
+                "relocalization_options": {}
+            }
+        }
+        action_id = self.api.create_actions(payload)
+
+        if action_id:
+            self.delay(0.2)
+            action_status = self.api.get_action_status(action_id).get("state")
+            if action_status.get("result") == 0:
+                response.success = True
+                response.message = f"The AMR is recovering localization, action ID:{action_id}"
+            else:
+                response.success = False 
+                response.message = f"The RecoverLocalizationAction failed to execute, action ID:{action_id}"
+        else:
+            response.success = False
+            response.message = "Failed to send POST request for the RecoverLocalizationAction."
+        return response
+     
     def set_max_speed_callback(self, request, response):
         self.get_logger().info(f"Set max moving speed: {request.max_moving_speed}")
         result_move = self.api.set_max_speed(param= "base.max_moving_speed", value= request.max_moving_speed)
@@ -74,7 +145,6 @@ class PerceptionControlManagerNode(Node):
         self.get_logger().info(f"Set max angular speed: {request.max_angular_speed}")
         result_ang = self.api.set_max_speed(param= "base.max_angular_speed", value= request.max_angular_speed)
         
-
         response.success = result_move and result_ang
         return response
     
@@ -87,26 +157,14 @@ class PerceptionControlManagerNode(Node):
         
         response.success = result
         return response
-    
-    """
-    def create_navigation_callback(self, request, response):
-        self.get_logger().info(f'Create navigation service called with pose: {request.pose}')
-        action_id = self.api.create_navigation_action(request.pose)
-        if action_id:
-            response.success = True
-            response.action_id = action_id
-        else:
-            response.success = False
-            response.action_id = ""
-        return response
 
     def get_action_status_callback(self, request, response):
-        # self.get_logger().info(f"Get action status service called for ID: {request.action_id}")
-        status = self.api.get_action_status(request.action_id)
-        if status and 'state' in status:
-            response.status = status['state']
+        action_id = request.action_id if request.action_id else ":current"
+        status = self.api.get_action_status(action_id)
+        if status:
+            response.status = str(status)
         else:
-            response.status = "error"
+            response.status = ""
         return response
 
     def cancel_action_callback(self, request, response):
@@ -115,18 +173,8 @@ class PerceptionControlManagerNode(Node):
         response.success = True
         return response
 
-    # Publisher Callbacks
-    def publish_current_pose(self):
-        pose = self.api.get_current_pose(self.get_clock())
-        if pose:
-            self.current_pose_publisher.publish(pose)
-
-    def publish_laser_scan(self):
-        scan = self.api.get_laser_scan(self.get_clock())
-        if scan:
-            self.laser_scan_publisher.publish(scan)
-    """
     
+    # Publisher Callbacks
     def publish_remaining_targets(self):
         data = self.api.get_remaining_targets()
         if data is not None:
@@ -161,6 +209,13 @@ class PerceptionControlManagerNode(Node):
         if events is not None:
             msg = String(data = str(events))
             self.amr_events_publisher.publish(msg)
+
+    def publish_current_action(self):
+        action_status = self.api.get_action_status()
+
+        if action_status is not None:
+            msg = String(data = str(action_status))
+            self.current_action_publisher.publish(msg)
 
 
 def main(args=None):
