@@ -77,9 +77,9 @@ class GuidanceActionServer(Node):
         self.declare_parameter('success_yaw_threshold', 0.1)       # Yaw angle threshold (radians)
         self.declare_parameter('stuck_timeout_sec', 30.0)          # Stuck timeout duration (seconds)
         self.declare_parameter('stuck_distance_threshold', 0.05)   # Stuck detection distance threshold (meters)
-        self.declare_parameter('normal_distance_min', 0.8)         # Min distance for normal following (meters)
-        self.declare_parameter('normal_distance_max', 2.0)         # Max distance for normal following (meters)
-        self.declare_parameter('lost_distance_threshold', 3.0)     # Distance threshold for lost (meters)
+        self.declare_parameter('normal_distance_min', 1.0)         # Min distance for normal following (meters)
+        self.declare_parameter('normal_distance_max', 2.2)         # Max distance for normal following (meters)
+        self.declare_parameter('lost_distance_threshold', 3.5)     # Distance threshold for lost (meters)
         self.declare_parameter('lost_timeout_sec', 10.0)           # Timeout for waiting after lost (seconds)
         self.declare_parameter('max_moving_speed', 1.0)            # Max linear speed of AMR (m/s)
         self.declare_parameter('max_angular_speed', 1.2)           # Max angular speed of AMR (rad/s)
@@ -205,7 +205,7 @@ class GuidanceActionServer(Node):
         for attempt in range(3):  # Retry up to 3 times
             future = await self.set_max_speed_client.call_async(request)
             if future.success:
-                self.get_logger().debug(
+                self.get_logger().info(
                     f'Set max speed: max_moving_speed={max_moving_speed:.2f}, max_angular_speed={max_angular_speed:.2f}')
                 return True
             self.get_logger().warn(f'Failed to set max speed, attempt {attempt + 1}/3')
@@ -286,57 +286,57 @@ class GuidanceActionServer(Node):
         
         # Speed adjustment logic
         status = "Following"
-        if (self._last_speed_change_time is None or 
-            (current_time - self._last_speed_change_time).nanoseconds / 1e9 > 1.0):  # Adjust speed every 1 second
-            if human_distance < self.normal_distance_min:
-                # Human too close, accelerate
-                new_max_moving_speed = 1.3 * self._speed_ratio * self.max_moving_speed
-                new_max_angular_speed = 1.3 * self._speed_ratio * self.max_angular_speed
-                status = "TooClose"
-                self._is_human_lost = False
-                self._human_lost_start_time = None
-                self.get_logger().info(f"TooClose  ---> Distance:{human_distance:.2f}, moving_speed:{new_max_moving_speed:.2f}, angular_speed:{new_max_angular_speed:.2f}")
-            elif human_distance > self.normal_distance_max:
-                if human_distance > self.lost_distance_threshold:
-                    # Human lost
-                    new_max_moving_speed = 0.05
-                    new_max_angular_speed = 0.1
-                    status = "Lost"
-                    self.get_logger().warn(f"Lost      ---> Distance:{human_distance:.2f}, moving_speed:{new_max_moving_speed:.2f}, angular_speed:{new_max_angular_speed:.2f}")
-                    if not self._is_human_lost:
-                        self._is_human_lost = True
-                        self._human_lost_start_time = current_time
-                    elif (current_time - self._human_lost_start_time).nanoseconds / 1e9 > self.lost_timeout_sec:
-                        self.get_logger().error(f"Human lost for {self.lost_timeout_sec} seconds, aborting action")
-                        status = "ABORTING"
-                        return status
-                else:
-                    # Human lagging, smooth deceleration
-                    k = (self._speed_ratio * self.max_moving_speed - 0.05) / (self.lost_distance_threshold - self.normal_distance_max)
-                    new_max_moving_speed = self._speed_ratio * self.max_moving_speed - k * (human_distance - self.normal_distance_max)
-                    new_max_angular_speed = self._speed_ratio * self.max_angular_speed - k * (human_distance - self.normal_distance_max)
-                    status = "Lagging"
-                    self._is_human_lost = False
-                    self._human_lost_start_time = None
-                    self.get_logger().info(f"Lagging   ---> Distance:{human_distance:.2f}, moving_speed:{new_max_moving_speed:.2f}, angular_speed:{new_max_angular_speed:.2f}")
-            else:
-                # Normal following
-                new_max_moving_speed = self._speed_ratio * self.max_moving_speed
-                new_max_angular_speed = self._speed_ratio * self.max_angular_speed
-                status = "Following"
-                self._is_human_lost = False
-                self._human_lost_start_time = None
-                self.get_logger().info(f"Following ---> Distance:{human_distance:.2f}, moving_speed:{new_max_moving_speed:.2f}, angular_speed:{new_max_angular_speed:.2f}")
-
-            # Update speed if changed
-            if self._last_max_moving_speed is None or abs(new_max_moving_speed - self._last_max_moving_speed) > 0.01:
-                success = await self.set_max_speed(new_max_moving_speed, new_max_angular_speed)
-                if not success:
-                    self.get_logger().error("Speed adjustment failed, service failure")
+        if human_distance < self.normal_distance_min:
+            # Human too close, accelerate
+            new_max_moving_speed = 1.3 * self._speed_ratio * self.max_moving_speed
+            new_max_angular_speed = 1.3 * self._speed_ratio * self.max_angular_speed
+            status = "TooClose"
+            self._is_human_lost = False
+            self._human_lost_start_time = None
+            self.get_logger().info(f"TooClose  ---> Distance:{human_distance:.2f}, moving_speed:{new_max_moving_speed:.2f}, angular_speed:{new_max_angular_speed:.2f}")
+        elif human_distance > self.normal_distance_max:
+            if human_distance > self.lost_distance_threshold:
+                # Human lost
+                new_max_moving_speed = 0.05
+                new_max_angular_speed = 0.1
+                status = "Lost"
+                self.get_logger().warn(f"Lost      ---> Distance:{human_distance:.2f}, moving_speed:{new_max_moving_speed:.2f}, angular_speed:{new_max_angular_speed:.2f}")
+                if not self._is_human_lost:
+                    self._is_human_lost = True
+                    self._human_lost_start_time = current_time
+                elif (current_time - self._human_lost_start_time).nanoseconds / 1e9 > self.lost_timeout_sec:
+                    self.get_logger().error(f"Human lost for {self.lost_timeout_sec} seconds, aborting action")
+                    status = "ABORTING"
                     return status
-                
-                self._last_max_moving_speed = new_max_moving_speed
-                self._last_speed_change_time = current_time
+            else:
+                # Human lagging, smooth deceleration
+                k = (self._speed_ratio * self.max_moving_speed - 0.05) / (self.lost_distance_threshold - self.normal_distance_max)
+                new_max_moving_speed = self._speed_ratio * self.max_moving_speed - k * (human_distance - self.normal_distance_max)
+                new_max_angular_speed = self._speed_ratio * self.max_angular_speed - k * (human_distance - self.normal_distance_max)
+                status = "Lagging"
+                self._is_human_lost = False
+                self._human_lost_start_time = None
+                self.get_logger().info(f"Lagging   ---> Distance:{human_distance:.2f}, moving_speed:{new_max_moving_speed:.2f}, angular_speed:{new_max_angular_speed:.2f}")
+        else:
+            # Normal following
+            new_max_moving_speed = self._speed_ratio * self.max_moving_speed
+            new_max_angular_speed = self._speed_ratio * self.max_angular_speed
+            status = "Following"
+            self._is_human_lost = False
+            self._human_lost_start_time = None
+            self.get_logger().info(f"Following ---> Distance:{human_distance:.2f}, moving_speed:{new_max_moving_speed:.2f}, angular_speed:{new_max_angular_speed:.2f}")
+
+        # Update speed if changed
+        if (self._last_max_moving_speed is None or abs(new_max_moving_speed - self._last_max_moving_speed) > 0.01) \
+                and (current_time - self._last_speed_change_time).nanoseconds / 1e9 > 1.0:  # Adjust speed every 1 second:
+            
+            success = await self.set_max_speed(new_max_moving_speed, new_max_angular_speed)
+            if not success:
+                self.get_logger().error("Speed adjustment failed, service failure")
+                return status
+            
+            self._last_max_moving_speed = new_max_moving_speed
+            self._last_speed_change_time = current_time
 
         return status
 

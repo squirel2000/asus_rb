@@ -9,10 +9,4 @@ def generate_launch_description():
             name='navigation_motion_node',
             output='screen'
         ),
-        Node(
-            package='navigation',
-            executable='coordinator_node.py',
-            name='navigation_coordinator',
-            output='screen'
-        ),
     ])

@@ -29,7 +29,7 @@ class RestfulAPI:
             return response.json()
         except requests.exceptions.RequestException as e:
             
-            if e.response.status_code == 404:
+            if e.response is not None and e.response.status_code == 404:
                 # if no action is currently executed, will get 404 error.
                 self.logger.debug(f"Error getting events: {e}")
                 return {}

@@ -142,10 +142,10 @@ class PerceptionControlManagerNode(Node):
         return response
      
     def set_max_speed_callback(self, request, response):
-        self.get_logger().info(f"Set max moving speed: {request.max_moving_speed}")
+        self.get_logger().debug(f"Set max moving speed: {request.max_moving_speed}")
         result_move = self.api.set_max_speed(param= "base.max_moving_speed", value= request.max_moving_speed)
 
-        self.get_logger().info(f"Set max angular speed: {request.max_angular_speed}")
+        self.get_logger().debug(f"Set max angular speed: {request.max_angular_speed}")
         result_ang = self.api.set_max_speed(param= "base.max_angular_speed", value= request.max_angular_speed)
         
         response.success = result_move and result_ang
