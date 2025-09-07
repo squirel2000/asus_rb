@@ -32,3 +32,14 @@ pure_pursuit_controller:
 
     # Controller Settings
     controller_frequency: 20.0
+    # Linear acceleration / deceleration (m/s^2)
+    # Note: the controller applies deceleration as a positive magnitude internally.
+    linear_acceleration: 0.30
+    linear_deceleration: 0.60
+    # Odom timeout (seconds). If no new odom is received within this interval, controller will stop for safety.
+    odom_timeout: 1.0
+    # Diagnostics and safety tuning
+    # If measured dt reaches max_dt repeatedly, controller will warn and stop after the consecutive threshold.
+    max_dt_consec_threshold: 3
+    # EMA alpha for smoothing reported dt values on the diagnostics topic (0..1)
+    odom_dt_ema_alpha: 0.2

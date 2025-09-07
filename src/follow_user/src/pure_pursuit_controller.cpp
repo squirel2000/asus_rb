@@ -3,6 +3,7 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <std_msgs/msg/float64.hpp>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -29,7 +30,7 @@ public:
         this->declare_parameter("max_lookahead_dist", 1.5);
         this->declare_parameter("lookahead_time", 1.5);
         this->declare_parameter("desired_linear_vel", 0.5);
-        this->declare_parameter("max_linear_vel", 0.20); 
+        this->declare_parameter("max_linear_vel", 0.20);
         this->declare_parameter("max_angular_vel", 1.2);
         this->declare_parameter("heading_error_for_pure_rotation", 1.57); // 90 degrees
         this->declare_parameter("min_heading_error_for_motion", 0.35); // 20 degrees
@@ -42,6 +43,14 @@ public:
         this->declare_parameter("base_frame", "base_link");
         this->declare_parameter("global_frame", "odom");  // Change to slamware_map
         this->declare_parameter("controller_frequency", 20.0);
+        this->declare_parameter("linear_acceleration", 0.3);
+        this->declare_parameter("linear_deceleration", 0.6);
+        // Parameters for timestamp-based dt handling
+        this->declare_parameter("min_dt", 0.01);
+        this->declare_parameter("max_dt", 0.5);
+        this->declare_parameter("odom_timeout", 1.0);
+    this->declare_parameter("max_dt_consec_threshold", 3);
+    this->declare_parameter("odom_dt_ema_alpha", 0.2);
 
         // Get parameters
         lookahead_dist_ = this->get_parameter("lookahead_dist").as_double();
@@ -61,7 +70,14 @@ public:
         cmd_vel_topic_ = this->get_parameter("cmd_vel_topic").as_string();
         base_frame_ = this->get_parameter("base_frame").as_string();
         global_frame_ = this->get_parameter("global_frame").as_string();
-        double controller_frequency = this->get_parameter("controller_frequency").as_double();
+        controller_frequency_ = this->get_parameter("controller_frequency").as_double();
+        linear_acceleration_ = this->get_parameter("linear_acceleration").as_double();
+        linear_deceleration_ = this->get_parameter("linear_deceleration").as_double();
+        min_dt_ = this->get_parameter("min_dt").as_double();
+        max_dt_ = this->get_parameter("max_dt").as_double();
+        odom_timeout_ = this->get_parameter("odom_timeout").as_double();
+    max_dt_consec_threshold_ = this->get_parameter("max_dt_consec_threshold").as_int();
+    odom_dt_ema_alpha_ = this->get_parameter("odom_dt_ema_alpha").as_double();
 
         // Publishers and subscribers
         path_sub_ = this->create_subscription<nav_msgs::msg::Path>(
@@ -74,10 +90,11 @@ public:
 
         cmd_vel_pub_ = this->create_publisher<geometry_msgs::msg::Twist>(cmd_vel_topic_, 10);
         carrot_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("lookahead_point", 10);
+    odom_dt_pub_ = this->create_publisher<std_msgs::msg::Float64>("/follow_user/odom_dt", 10);
 
         // Timer for control loop
         control_timer_ = this->create_wall_timer(
-            std::chrono::milliseconds(static_cast<int>(1000.0 / controller_frequency)),
+            std::chrono::milliseconds(static_cast<int>(1000.0 / controller_frequency_)),
             std::bind(&PurePursuitController::controlLoop, this));
         
         RCLCPP_INFO(this->get_logger(), "Regulated Pure Pursuit Controller initialized");
@@ -99,10 +116,45 @@ private:
     
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
     {
-    current_velocity_ = msg->twist.twist.linear.x;
-    // Cache latest odometry pose for fallback when TF lookup fails
-    std::lock_guard<std::mutex> lock(odom_mutex_);
-    latest_odom_ = *msg;
+        // Update velocity and compute dt from odom timestamps
+        rclcpp::Time odom_time = rclcpp::Time(msg->header.stamp);
+        double measured_dt = 0.0;
+        if (have_last_odom_stamp_) {
+            measured_dt = (odom_time - last_odom_stamp_).seconds();
+            // clamp measured dt to avoid extreme values
+            measured_dt = std::clamp(measured_dt, min_dt_, max_dt_);
+            last_odom_dt_ = measured_dt;
+        } else {
+            // first measurement - use controller frequency as a reasonable default
+            last_odom_dt_ = 1.0 / controller_frequency_;
+            have_last_odom_stamp_ = true;
+        }
+        last_odom_stamp_ = odom_time;
+
+        current_velocity_ = msg->twist.twist.linear.x;
+
+        // Update EMA of dt for diagnostics
+        if (last_odom_dt_.has_value()) {
+            double measured = last_odom_dt_.value();
+            if (!odom_dt_ema_.has_value()) odom_dt_ema_ = measured;
+            else odom_dt_ema_ = odom_dt_ema_.value() * (1.0 - odom_dt_ema_alpha_) + measured * odom_dt_ema_alpha_;
+
+            // Publish diagnostic dt
+            std_msgs::msg::Float64 m;
+            m.data = odom_dt_ema_.value();
+            odom_dt_pub_->publish(m);
+
+            // Track consecutive max_dt hits
+            if (measured >= max_dt_) {
+                ++consec_max_dt_count_;
+            } else {
+                consec_max_dt_count_ = 0;
+            }
+        }
+
+        // Cache latest odometry pose for fallback when TF lookup fails
+        std::lock_guard<std::mutex> lock(odom_mutex_);
+        latest_odom_ = *msg;
     }
 
     void controlLoop()
@@ -113,6 +165,23 @@ private:
                 is_moving_ = false;
             }
             return;
+        }
+        // Safety: if odom timeout occurred, stop the robot
+        if (have_last_odom_stamp_) {
+            double since_last_odom = (this->get_clock()->now() - last_odom_stamp_).seconds();
+            if (since_last_odom > odom_timeout_) {
+                RCLCPP_ERROR(this->get_logger(), "No odom received for %.2f s (timeout=%.2f). Stopping.", since_last_odom, odom_timeout_);
+                publishZeroVelocity();
+                is_moving_ = false;
+                return;
+            }
+            // If we have been hitting max_dt frequently, treat as degraded and stop
+            if (consec_max_dt_count_ >= max_dt_consec_threshold_) {
+                RCLCPP_ERROR(this->get_logger(), "Measured dt reached max_dt (%g) %d times — stopping for safety.", max_dt_, (int)consec_max_dt_count_);
+                publishZeroVelocity();
+                is_moving_ = false;
+                return;
+            }
         }
         
         geometry_msgs::msg::PoseStamped robot_pose;
@@ -216,15 +285,30 @@ private:
             robot_pose.pose.position.x - current_path_.poses.back().pose.position.x,
             robot_pose.pose.position.y - current_path_.poses.back().pose.position.y);
 
-        double commanded_vel;
+        double target_velocity;
         if (dist_to_goal < approach_velocity_scaling_dist_) {
             double scale = dist_to_goal / approach_velocity_scaling_dist_;
-            commanded_vel = std::max(min_approach_linear_velocity_, scale * desired_linear_vel_);
+            target_velocity = std::max(min_approach_linear_velocity_, scale * desired_linear_vel_);
         } else {
-            commanded_vel = desired_linear_vel_;
+            target_velocity = desired_linear_vel_;
         }
-        
-        return std::min(commanded_vel, max_linear_vel_);
+
+        double velocity_error = target_velocity - current_velocity_;
+        // Use the measured dt from odomCallback when available, otherwise fall back
+        double dt = last_odom_dt_.has_value() ? last_odom_dt_.value() : (1.0 / controller_frequency_);
+        // Clamp dt as a safety measure
+        dt = std::clamp(dt, min_dt_, max_dt_);
+
+        double new_velocity;
+        if (velocity_error > 0) {
+            new_velocity = current_velocity_ + std::abs(linear_acceleration_) * dt;
+        } else {
+            // Ensure deceleration is applied as a negative change regardless of YAML sign
+            new_velocity = current_velocity_ - std::abs(linear_deceleration_) * dt;
+        }
+
+        current_velocity_ = std::clamp(new_velocity, -max_linear_vel_, max_linear_vel_);
+        return std::min(current_velocity_, max_linear_vel_);
     }
 
     bool getLookaheadPoint(const geometry_msgs::msg::PoseStamped& robot_pose,
@@ -430,17 +514,32 @@ private:
     std::string global_frame_;
     double heading_error_for_pure_rotation_;
     double min_heading_error_for_motion_;
-    
+    double controller_frequency_;
+    double linear_acceleration_;
+    double linear_deceleration_;
+    double min_dt_ = 0.01;
+    double max_dt_ = 0.5;
+    rclcpp::Time last_odom_stamp_;
+    std::optional<double> last_odom_dt_;
+    bool have_last_odom_stamp_ = false;
+    double odom_timeout_ = 1.0;
+    // Diagnostics for odom dt
+    std::optional<double> odom_dt_ema_;
+    double odom_dt_ema_alpha_ = 0.2;
+    int max_dt_consec_threshold_ = 3;
+    int consec_max_dt_count_ = 0;
+
     // ROS components
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr carrot_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr odom_dt_pub_;
     rclcpp::TimerBase::SharedPtr control_timer_;
-    
+
     tf2_ros::Buffer tf_buffer_;
     tf2_ros::TransformListener tf_listener_;
-    
+
     // State
     nav_msgs::msg::Path current_path_;
     bool path_received_ = false;
