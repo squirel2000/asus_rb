@@ -45,12 +45,14 @@ public:
         this->declare_parameter("controller_frequency", 20.0);
         this->declare_parameter("linear_acceleration", 0.3);
         this->declare_parameter("linear_deceleration", 0.6);
+        // EMA smoothing for target velocity used by lookahead and acceleration logic
+        this->declare_parameter("target_velocity_ema_alpha", 0.2);
         // Parameters for timestamp-based dt handling
         this->declare_parameter("min_dt", 0.01);
         this->declare_parameter("max_dt", 0.5);
         this->declare_parameter("odom_timeout", 1.0);
-    this->declare_parameter("max_dt_consec_threshold", 3);
-    this->declare_parameter("odom_dt_ema_alpha", 0.2);
+        this->declare_parameter("max_dt_consec_threshold", 3);
+        this->declare_parameter("odom_dt_ema_alpha", 0.2);
 
         // Get parameters
         lookahead_dist_ = this->get_parameter("lookahead_dist").as_double();
@@ -76,8 +78,9 @@ public:
         min_dt_ = this->get_parameter("min_dt").as_double();
         max_dt_ = this->get_parameter("max_dt").as_double();
         odom_timeout_ = this->get_parameter("odom_timeout").as_double();
-    max_dt_consec_threshold_ = this->get_parameter("max_dt_consec_threshold").as_int();
-    odom_dt_ema_alpha_ = this->get_parameter("odom_dt_ema_alpha").as_double();
+        max_dt_consec_threshold_ = this->get_parameter("max_dt_consec_threshold").as_int();
+        odom_dt_ema_alpha_ = this->get_parameter("odom_dt_ema_alpha").as_double();
+        target_velocity_ema_alpha_ = this->get_parameter("target_velocity_ema_alpha").as_double();
 
         // Publishers and subscribers
         path_sub_ = this->create_subscription<nav_msgs::msg::Path>(
@@ -90,7 +93,11 @@ public:
 
         cmd_vel_pub_ = this->create_publisher<geometry_msgs::msg::Twist>(cmd_vel_topic_, 10);
         carrot_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("lookahead_point", 10);
-    odom_dt_pub_ = this->create_publisher<std_msgs::msg::Float64>("/follow_user/odom_dt", 10);
+        odom_dt_pub_ = this->create_publisher<std_msgs::msg::Float64>("/follow_user/odom_dt", 10);
+        // Debug publishers
+        dbg_target_vel_pub_ = this->create_publisher<std_msgs::msg::Float64>("/follow_user/target_velocity", 5);
+        dbg_current_vel_pub_ = this->create_publisher<std_msgs::msg::Float64>("/follow_user/current_velocity", 5);
+        dbg_speed_scale_pub_ = this->create_publisher<std_msgs::msg::Float64>("/follow_user/speed_scale", 5);
 
         // Timer for control loop
         control_timer_ = this->create_wall_timer(
@@ -212,6 +219,21 @@ private:
         cmd_vel.linear.x = 0.0;
         cmd_vel.angular.z = 0.0;
 
+        // Compute raw target_velocity based on distance to goal and update EMA
+        double dist_to_goal = std::hypot(
+            robot_pose.pose.position.x - current_path_.poses.back().pose.position.x,
+            robot_pose.pose.position.y - current_path_.poses.back().pose.position.y);
+        double raw_target_velocity;
+        if (dist_to_goal < approach_velocity_scaling_dist_) {
+            double scale = dist_to_goal / approach_velocity_scaling_dist_;
+            raw_target_velocity = std::max(min_approach_linear_velocity_, scale * desired_linear_vel_);
+        } else {
+            raw_target_velocity = desired_linear_vel_;
+        }
+        if (!target_velocity_ema_.has_value()) target_velocity_ema_ = raw_target_velocity;
+        else target_velocity_ema_ = target_velocity_ema_.value() * (1.0 - target_velocity_ema_alpha_) + raw_target_velocity * target_velocity_ema_alpha_;
+
+        // Now get lookahead using the filtered/EMA target velocity
         geometry_msgs::msg::PoseStamped carrot_pose;
         if (!getLookaheadPoint(robot_pose, carrot_pose)) {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "Could not find a lookahead point. Stopping.");
@@ -231,7 +253,7 @@ private:
         double heading_error = angles::normalize_angle(angle_to_carrot_global - robot_yaw);
         
         // Implement smooth, scaled turning
-        double linear_vel = calculateSpeed(robot_pose);
+        // First compute heading error and speed_scale so we can decide if rotation is needed
         double speed_scale = 1.0;
         if (std::abs(heading_error) > heading_error_for_pure_rotation_) {
             speed_scale = 0.0; // Error is too large, pure rotation
@@ -242,8 +264,19 @@ private:
                           (heading_error_for_pure_rotation_ - min_heading_error_for_motion_);
             RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "Aligning with scaled speed. Scale: %.2f", speed_scale);
         }
-        
+
+        // If rotation-only is requested, tell calculateSpeed to aim for zero so it will ramp down
+        std::optional<double> target_override = std::nullopt;
+        if (speed_scale == 0.0) target_override = 0.0;
+
+        double linear_vel = calculateSpeed(robot_pose, target_override);
+        // After calculateSpeed has produced a smoothed current_velocity_, scale final output
         linear_vel *= speed_scale;
+
+        // Publish speed_scale for debugging
+        if (dbg_speed_scale_pub_) {
+            std_msgs::msg::Float64 m; m.data = speed_scale; dbg_speed_scale_pub_->publish(m);
+        }
         
         // The rest of the pure pursuit logic for calculating angular velocity
         double angle_to_carrot_robot_frame = 0.0;
@@ -279,21 +312,31 @@ private:
         return cmd_vel;
     }
 
-    double calculateSpeed(const geometry_msgs::msg::PoseStamped & robot_pose)
+    // calculateSpeed optionally accepts a target override (e.g., 0.0 to ramp to stop for rotation)
+    double calculateSpeed(const geometry_msgs::msg::PoseStamped & robot_pose, std::optional<double> target_override = std::nullopt)
     {
         double dist_to_goal = std::hypot(
             robot_pose.pose.position.x - current_path_.poses.back().pose.position.x,
             robot_pose.pose.position.y - current_path_.poses.back().pose.position.y);
 
         double target_velocity;
-        if (dist_to_goal < approach_velocity_scaling_dist_) {
+        if (target_override.has_value()) {
+            target_velocity = target_override.value();
+        } else if (dist_to_goal < approach_velocity_scaling_dist_) {
             double scale = dist_to_goal / approach_velocity_scaling_dist_;
             target_velocity = std::max(min_approach_linear_velocity_, scale * desired_linear_vel_);
         } else {
             target_velocity = desired_linear_vel_;
         }
 
-        double velocity_error = target_velocity - current_velocity_;
+        // Update filtered target velocity (EMA) used for lookahead and integration
+        if (!target_velocity_ema_.has_value()) {
+            target_velocity_ema_ = target_velocity;
+        } else {
+            target_velocity_ema_ = target_velocity_ema_.value() * (1.0 - target_velocity_ema_alpha_) + target_velocity * target_velocity_ema_alpha_;
+        }
+
+        double velocity_error = target_velocity_ema_.value() - current_velocity_;
         // Use the measured dt from odomCallback when available, otherwise fall back
         double dt = last_odom_dt_.has_value() ? last_odom_dt_.value() : (1.0 / controller_frequency_);
         // Clamp dt as a safety measure
@@ -301,20 +344,32 @@ private:
 
         double new_velocity;
         if (velocity_error > 0) {
-            new_velocity = current_velocity_ + std::abs(linear_acceleration_) * dt;
+            // Accelerate toward the filtered target but do not exceed it
+            new_velocity = std::min(target_velocity_ema_.value(), current_velocity_ + std::abs(linear_acceleration_) * dt);
         } else {
-            // Ensure deceleration is applied as a negative change regardless of YAML sign
-            new_velocity = current_velocity_ - std::abs(linear_deceleration_) * dt;
+            // Decelerate toward the filtered target but do not go below it
+            new_velocity = std::max(target_velocity_ema_.value(), current_velocity_ - std::abs(linear_deceleration_) * dt);
         }
 
-        current_velocity_ = std::clamp(new_velocity, -max_linear_vel_, max_linear_vel_);
-        return std::min(current_velocity_, max_linear_vel_);
+        current_velocity_ = std::clamp(new_velocity, 0.0, max_linear_vel_);
+
+        // publish debug topics for tuning
+        if (dbg_target_vel_pub_) {
+            std_msgs::msg::Float64 m; m.data = target_velocity_ema_.value(); dbg_target_vel_pub_->publish(m);
+        }
+        if (dbg_current_vel_pub_) {
+            std_msgs::msg::Float64 m; m.data = current_velocity_; dbg_current_vel_pub_->publish(m);
+        }
+
+        return current_velocity_;
     }
 
     bool getLookaheadPoint(const geometry_msgs::msg::PoseStamped& robot_pose,
                            geometry_msgs::msg::PoseStamped& lookahead_point)
     {
-        double lookahead_dist = std::clamp(lookahead_time_ * current_velocity_, min_lookahead_dist_, max_lookahead_dist_);
+        // Use the filtered target velocity for lookahead if available, otherwise fallback to current_velocity_
+        double vel_for_lookahead = target_velocity_ema_.has_value() ? target_velocity_ema_.value() : current_velocity_;
+        double lookahead_dist = std::clamp(lookahead_time_ * vel_for_lookahead, min_lookahead_dist_, max_lookahead_dist_);
         
         size_t closest_segment_idx = findClosestPathSegment(robot_pose, last_path_segment_idx_);
         last_path_segment_idx_ = closest_segment_idx;
@@ -529,12 +584,20 @@ private:
     int max_dt_consec_threshold_ = 3;
     int consec_max_dt_count_ = 0;
 
+    // Filtered target velocity (EMA) used for lookahead and speed smoothing
+    std::optional<double> target_velocity_ema_;
+    double target_velocity_ema_alpha_ = 0.2;
+
     // ROS components
     rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr carrot_pub_;
     rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr odom_dt_pub_;
+    // Debug publishers
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr dbg_target_vel_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr dbg_current_vel_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr dbg_speed_scale_pub_;
     rclcpp::TimerBase::SharedPtr control_timer_;
 
     tf2_ros::Buffer tf_buffer_;

@@ -34,8 +34,8 @@ pure_pursuit_controller:
     controller_frequency: 20.0
     # Linear acceleration / deceleration (m/s^2)
     # Note: the controller applies deceleration as a positive magnitude internally.
-    linear_acceleration: 0.30
-    linear_deceleration: 0.60
+    linear_acceleration: 0.20
+    linear_deceleration: 0.40
     # Odom timeout (seconds). If no new odom is received within this interval, controller will stop for safety.
     odom_timeout: 1.0
     # Diagnostics and safety tuning

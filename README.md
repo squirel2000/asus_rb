@@ -111,3 +111,9 @@ The follow-user task will subscribe to the `/clicked_point` topic as the goal po
     ```bash
     ros2 launch follow_user pure_pursuit.launch.py
     ```
+
+* Emulate a person walking in front of the robot by publishing `geometry_msgs/msg/PointStamped` messages to the `/clicked_point` topic.
+    ```bash
+    python3 src/follow_user/test/person_simulator.py
+    ```
+
