@@ -6,6 +6,7 @@ from std_srvs.srv import Trigger, SetBool
 from utils.restful_api import RestfulAPI
 from perception_control_manager.srv import GetActionStatus, SetMaxSpeed, CreateMoveTo
 from std_msgs.msg import String, Float32MultiArray, MultiArrayDimension
+from geometry_msgs.msg import Twist
 
 # slamtec https://bucket-download.slamtec.com/df3d216e95439541c6f0fafb5ad8dd61d1865a78/AM201_SLAMTEC_Apollo2.0_usermanual_A5M31_v1_en_0613.pdf
 # GET http://127.0.0.1:1448/api/core/system/v1/power/status
@@ -32,6 +33,8 @@ class PerceptionControlManagerNode(Node):
         self.current_action_publisher = self.create_publisher(String, 'current_action', 10)
         self.action_timer = self.create_timer(0.2, self.publish_current_action) # 5 Hz
 
+        self.current_max_speed_publisher = self.create_publisher(Twist, 'current_max_speed', 10)
+        self.max_speed_timer = self.create_timer(0.1, self.publish_current_max_speed) # 10 Hz
         
         # Services
         self.get_status_service = self.create_service(
@@ -142,13 +145,19 @@ class PerceptionControlManagerNode(Node):
         return response
      
     def set_max_speed_callback(self, request, response):
-        self.get_logger().debug(f"Set max moving speed: {request.max_moving_speed}")
-        result_move = self.api.set_max_speed(param= "base.max_moving_speed", value= request.max_moving_speed)
+        # Set speed api minimum is 0.05
+        if request.max_moving_speed!=0.0:
+            self.get_logger().debug(f"Set max moving speed: {request.max_moving_speed}")
+            result_move = self.api.set_max_speed(param= "base.max_moving_speed", value= request.max_moving_speed)
+        else:
+            result_move = False
+        if request.max_angular_speed!=0.0:
+            self.get_logger().debug(f"Set max angular speed: {request.max_angular_speed}")
+            result_ang = self.api.set_max_speed(param= "base.max_angular_speed", value= request.max_angular_speed)
+        else:
+            result_ang = False
 
-        self.get_logger().debug(f"Set max angular speed: {request.max_angular_speed}")
-        result_ang = self.api.set_max_speed(param= "base.max_angular_speed", value= request.max_angular_speed)
-        
-        response.success = result_move and result_ang
+        response.success = bool(result_move or result_ang)
         return response
     
     def set_emergency_stop_callback(self, request, response):
@@ -220,6 +229,15 @@ class PerceptionControlManagerNode(Node):
             msg = String(data = str(action_status))
             self.current_action_publisher.publish(msg)
 
+    def publish_current_max_speed(self):
+        linear = self.api.get_max_speed(param= "base.max_moving_speed")
+        angular = self.api.get_max_speed(param= "base.max_angular_speed")
+
+        if linear and angular:
+            msg = Twist()
+            msg.linear.x = float(linear)
+            msg.angular.z = float(angular)
+            self.current_max_speed_publisher.publish(msg)
 
 def main(args=None):
     rclpy.init(args=args)

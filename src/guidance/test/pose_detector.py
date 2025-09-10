@@ -10,7 +10,7 @@ class AprilTagDetector(Node):
     def __init__(self, visualize=True):
         # Initialize ROS2 node
         super().__init__('april_tag_detector')
-        self.publisher_ = self.create_publisher(PoseStamped, '/human_relative_pose', 10)
+        self.publisher_ = self.create_publisher(PoseStamped, '/human_relative_pose_rear', 10)
         
         # Initialize AprilTag detector
         self.detector = Detector(

@@ -154,7 +154,6 @@ class NavigateActionServer(Node):
         msg.location.x = pose.pose.position.x
         msg.location.y = pose.pose.position.y
         msg.location.z = pose.pose.position.z
-        # Extract yaw from quaternion
         quaternion = (
             pose.pose.orientation.x,
             pose.pose.orientation.y,
@@ -163,13 +162,12 @@ class NavigateActionServer(Node):
         )
         _, _, yaw = euler_from_quaternion(quaternion)
         msg.yaw = yaw
-        msg.options.opt_flags.flags = 48 # 16+32,MoveOptionFlag: [16:'PRECISE', 32:'WITH_YAW']
+        msg.options.opt_flags.flags = 48  # 16+32, MoveOptionFlag: [16:'PRECISE', 32:'WITH_YAW']
         msg.options.speed_ratio.is_valid = True
         msg.options.speed_ratio.value = speed_ratio
-        
         self.publisher_move_to.publish(msg)
         self.get_logger().info(
-            f'Published MoveToRequest : location=(%.2f, %.2f, %.2f), yaw=%.2f, speed_ratio=%.2f' % 
+            f'Published MoveToRequest: location=(%.2f, %.2f, %.2f), yaw=%.2f, speed_ratio=%.2f' % 
             (msg.location.x, msg.location.y, msg.location.z, msg.yaw, msg.options.speed_ratio.value)
         )
 
@@ -183,12 +181,10 @@ class NavigateActionServer(Node):
         """Check if the robot has reached the target pose (position and yaw)."""
         if current_pose is None:
             return False
-        
         # Calculate position distance
         dx = current_pose.pose.position.x - target_pose.pose.position.x
         dy = current_pose.pose.position.y - target_pose.pose.position.y
         distance = (dx**2 + dy**2)**0.5
-        
         # Extract yaw angles
         q1 = (current_pose.pose.orientation.x, current_pose.pose.orientation.y, 
               current_pose.pose.orientation.z, current_pose.pose.orientation.w)
@@ -201,9 +197,7 @@ class NavigateActionServer(Node):
         if yaw_diff > 3.1415926535:
             yaw_diff = 2 * 3.1415926535 - yaw_diff
             
-        # Debug logging
         self.get_logger().debug(f"Current distance: {distance:.2f} m, yaw difference: {yaw_diff:.2f} rad")
-        
         # Check if goal is reached
         if with_yaw:
             reached = distance < self.success_distance_threshold and yaw_diff < self.success_yaw_threshold
@@ -237,25 +231,21 @@ class NavigateActionServer(Node):
         return no_path or motionless
 
     def _get_status(self, events: list[dict]) -> str:
-        
+        """Determine the current status based on AMR events."""
         if any(e['type'] in ['DEVICE_ERROR'] for e in events):
-            status = "DEVICE_ERROR_DETECTED"
+            return "DEVICE_ERROR_DETECTED"
         elif any(e['type'] in ['BUMPER_TRIGGERED'] for e in events):
-            status = "COLLISION_DETECTED_BY_BUMPER"  
-        #elif any(e['type'] in ['BRAKE_RELEASED'] for e in events):
-            #status = "BRAKE_RELEASED"
+            return "COLLISION_DETECTED_BY_BUMPER"
         elif any(e['type'] in ['CLIFF_DETECTED'] for e in events):
-            status = "CLIFF_DETECTED"
+            return "CLIFF_DETECTED"
         elif any(e['type'] in ['WAIT_PLANNING_FAILED', 'PATH_FINDER_FAILED', 'SEARCH_LOCAL_PATH_FAILED'] for e in events):
-            status = "NO_VALID_PATH_FOUND"
+            return "NO_VALID_PATH_FOUND"
         elif any(e['type'] in ['CURRENT_POSE_OCCUPIED'] for e in events):
-            status = "TARGET_POSE_IS_OCCUPIED"  
+            return "TARGET_POSE_IS_OCCUPIED"
         elif any(e['type'] in ['PATH_OCCUPIED'] for e in events):
-            status = "DETOURING_TO_AVOID_OBSTACLE"
+            return "DETOURING_TO_AVOID_OBSTACLE"
         else:
-            status = "NAVIGATING_TO_TARGET" 
-        
-        return status
+            return "NAVIGATING_TO_TARGET"
 
     def _abort_goal(self, goal_handle, message: str):
         """Helper method to abort the goal with a specific message."""
@@ -285,6 +275,12 @@ class NavigateActionServer(Node):
         while rclpy.ok():
 
             current_state = self._get_status(self.amr_events)
+            # Publish feedback
+            if self.current_pose:
+                feedback_msg.current_pose = self.current_pose
+            feedback_msg.status = current_state
+            goal_handle.publish_feedback(feedback_msg)
+            
             if current_state == "DEVICE_ERROR_DETECTED":
                 self.get_logger().error('Device error detected on the AMR!')
                 timeout_message = f"Failed to dismiss the AMR device error warning within {_waiting_timeout} seconds."

@@ -84,7 +84,19 @@ class RestfulAPI:
             self.logger.error(f"Error getting events: {e}")
             return None
 
+    def get_max_speed(self, param = "base.max_moving_speed"):
+        try:
+            url = f"{self.base_url}/system/v1/parameter?param="+param
 
+            response = requests.get(url, timeout=2)
+            response.raise_for_status()
+            result = response.json()
+            
+            return result
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Error getting max speed: {str(e)}")
+            return None
+        
     def set_max_speed(self, param = "base.max_moving_speed", value = 0.5):
         try:
             url = f"{self.base_url}/system/v1/parameter"
@@ -100,7 +112,7 @@ class RestfulAPI:
             
             return result
         except requests.exceptions.RequestException as e:
-            self.logging.error(f"Error setting max speed: {str(e)}")
+            self.logger.error(f"Error setting max speed: {str(e)}")
             return None  
 
     def set_emergency_stop(self, param = "base.emergency_stop", value = "on"):
@@ -119,11 +131,11 @@ class RestfulAPI:
             #return result
 
             # Currently test "base.emergency_stop" didn't work, but "base.brake_release" workable
-            self.logging.error(f"Currently 'base.emergency_stop' didn't work!")
+            self.logger.error(f"Currently 'base.emergency_stop' didn't work!")
             return False 
     
         except requests.exceptions.RequestException as e:
-            self.logging.error(f"Error setting max speed: {str(e)}")
+            self.logger.error(f"Error setting max speed: {str(e)}")
             return None  
         
 

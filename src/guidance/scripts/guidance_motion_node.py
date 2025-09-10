@@ -5,7 +5,7 @@ from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.task import Future
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Twist
 from guidance.action import Guidance
 from slamware_ros_sdk.msg import MoveToRequest, CancelActionRequest
 from tf_transformations import euler_from_quaternion
@@ -54,7 +54,7 @@ class GuidanceActionServer(Node):
         # Subscription to human relative pose
         self.human_relative_pose = None
         self.human_pose_subscriber = self.create_subscription(
-            PoseStamped, '/human_relative_pose', self.human_pose_callback, 10, callback_group=self.callback_group)
+            PoseStamped, '/human_relative_pose_rear', self.human_pose_callback, 10, callback_group=self.callback_group)
         
         # Subscription to AMR events
         self.amr_events: list[dict] = []
@@ -72,16 +72,19 @@ class GuidanceActionServer(Node):
         self.publisher_cancel = self.create_publisher(
             CancelActionRequest, '/slamware_ros_sdk_server_node/cancel_action', 10, callback_group=self.callback_group)
 
+        self.publisher_set_max_speed = self.create_publisher(
+            Twist, '/set_max_speed', 10, callback_group=self.callback_group)
+
         # Declare ROS parameters with default values
         self.declare_parameter('success_distance_threshold', 0.1)  # Position distance threshold (meters)
         self.declare_parameter('success_yaw_threshold', 0.1)       # Yaw angle threshold (radians)
         self.declare_parameter('stuck_timeout_sec', 30.0)          # Stuck timeout duration (seconds)
         self.declare_parameter('stuck_distance_threshold', 0.05)   # Stuck detection distance threshold (meters)
-        self.declare_parameter('normal_distance_min', 1.0)         # Min distance for normal following (meters)
-        self.declare_parameter('normal_distance_max', 2.2)         # Max distance for normal following (meters)
-        self.declare_parameter('lost_distance_threshold', 3.5)     # Distance threshold for lost (meters)
+        self.declare_parameter('normal_distance_min', 1.2)         # Min distance for normal following (meters)
+        self.declare_parameter('normal_distance_max', 2.0)         # Max distance for normal following (meters)
+        self.declare_parameter('lost_distance_threshold', 3.0)     # Distance threshold for lost (meters)
         self.declare_parameter('lost_timeout_sec', 10.0)           # Timeout for waiting after lost (seconds)
-        self.declare_parameter('max_moving_speed', 1.0)            # Max linear speed of AMR (m/s)
+        self.declare_parameter('max_moving_speed', 1.5)            # Max linear speed of AMR (m/s)
         self.declare_parameter('max_angular_speed', 1.2)           # Max angular speed of AMR (rad/s)
 
         # Get parameter values
@@ -101,7 +104,8 @@ class GuidanceActionServer(Node):
         self._is_human_lost = False
         self._human_lost_start_time = None
         self._last_max_moving_speed = None
-        self._speed_ratio = None
+        self.current_max_moving_speed = self.max_moving_speed
+        self.current_max_angular_speed = self.max_angular_speed
 
         self.get_logger().info("Guide User to Pose Action Server has been started.")
         self.get_logger().info(
@@ -194,32 +198,40 @@ class GuidanceActionServer(Node):
         self.publisher_cancel.publish(msg)
         self.get_logger().info('Published CancelActionRequest')
         # Reset to default speed before aborting
-        await self.set_max_speed(self._speed_ratio * self.max_moving_speed, 
-                            self._speed_ratio * self.max_angular_speed)
+        await self.set_max_speed(self.max_moving_speed, self.max_angular_speed)
+        self.publish_set_max_speed(self.max_moving_speed, self.max_angular_speed)
+
+    def publish_set_max_speed(self, max_moving_speed: float, max_angular_speed: float):
+        
+        msg = Twist()
+        msg.linear.x = max_moving_speed
+        msg.angular.z = max_angular_speed
+        self.publisher_set_max_speed.publish(msg)
+
 
     async def set_max_speed(self, max_moving_speed: float, max_angular_speed: float):
         """Call service to set max moving and angular speed with retry on failure."""
         request = SetMaxSpeed.Request()
         request.max_moving_speed = max_moving_speed
         request.max_angular_speed = max_angular_speed
-        for attempt in range(3):  # Retry up to 3 times
-            future = await self.set_max_speed_client.call_async(request)
-            if future.success:
-                self.get_logger().info(
-                    f'Set max speed: max_moving_speed={max_moving_speed:.2f}, max_angular_speed={max_angular_speed:.2f}')
-                return True
-            self.get_logger().warn(f'Failed to set max speed, attempt {attempt + 1}/3')
-            await self.ros_async_sleep(0.1)
-        self.get_logger().error('Failed to set max speed after 3 attempts')
-        return False
+        future = await self.set_max_speed_client.call_async(request)
+        if future.success:
+            self.get_logger().info(
+                f'Set max speed: max_moving_speed={max_moving_speed:.2f}, max_angular_speed={max_angular_speed:.2f}')
+            return True
+        else:
+            self.get_logger().error('Failed to set max speed.')
+            return False
 
-    def _is_goal_reached(self, current_pose: PoseStamped, target_pose: PoseStamped) -> bool:
+    def _is_goal_reached(self, current_pose: PoseStamped, target_pose: PoseStamped, with_yaw= True) -> bool:
         """Check if the robot has reached the target pose (position and yaw)."""
         if current_pose is None:
             return False
+        # Calculate position distance
         dx = current_pose.pose.position.x - target_pose.pose.position.x
         dy = current_pose.pose.position.y - target_pose.pose.position.y
         distance = (dx**2 + dy**2)**0.5
+        # Extract yaw angles
         q1 = (current_pose.pose.orientation.x, current_pose.pose.orientation.y, 
               current_pose.pose.orientation.z, current_pose.pose.orientation.w)
         q2 = (target_pose.pose.orientation.x, target_pose.pose.orientation.y, 
@@ -227,10 +239,18 @@ class GuidanceActionServer(Node):
         _, _, yaw1 = euler_from_quaternion(q1)
         _, _, yaw2 = euler_from_quaternion(q2)
         yaw_diff = abs(yaw1 - yaw2)
+        # Ensure yaw difference is in [0, π]
         if yaw_diff > 3.1415926535:
             yaw_diff = 2 * 3.1415926535 - yaw_diff
+            
         self.get_logger().debug(f"Current distance: {distance:.2f} m, yaw difference: {yaw_diff:.2f} rad")
-        return distance < self.success_distance_threshold and yaw_diff < self.success_yaw_threshold
+        # Check if goal is reached
+        if with_yaw:
+            reached = distance < self.success_distance_threshold and yaw_diff < self.success_yaw_threshold
+        else:
+            reached = distance < self.success_distance_threshold
+
+        return reached
 
     def _is_stuck(self, current_pose: PoseStamped, last_pose: PoseStamped) -> bool:
         """Check if the robot is stuck based on position change."""
@@ -239,17 +259,21 @@ class GuidanceActionServer(Node):
         dx = current_pose.pose.position.x - last_pose.pose.position.x
         dy = current_pose.pose.position.y - last_pose.pose.position.y
         distance_moved = (dx**2 + dy**2)**0.5
+
         q1 = (current_pose.pose.orientation.x, current_pose.pose.orientation.y, 
-              current_pose.pose.orientation.z, current_pose.pose.orientation.w)
+            current_pose.pose.orientation.z, current_pose.pose.orientation.w)
         q2 = (last_pose.pose.orientation.x, last_pose.pose.orientation.y, 
-              last_pose.pose.orientation.z, last_pose.pose.orientation.w)
+            last_pose.pose.orientation.z, last_pose.pose.orientation.w)
         _, _, yaw1 = euler_from_quaternion(q1)
         _, _, yaw2 = euler_from_quaternion(q2)
         yaw_diff = abs(yaw1 - yaw2)
         if yaw_diff > 3.1415926535:
             yaw_diff = 2 * 3.1415926535 - yaw_diff
-        no_path = self._get_status(self.amr_events) == "NO_VALID_PATH_FOUND"
+
         motionless = distance_moved < self.stuck_distance_threshold and yaw_diff < 0.1
+
+        no_path = self._get_status(self.amr_events) == "NO_VALID_PATH_FOUND"
+
         return no_path or motionless
 
     def _get_status(self, events: list[dict]) -> str:
@@ -288,19 +312,18 @@ class GuidanceActionServer(Node):
         status = "Following"
         if human_distance < self.normal_distance_min:
             # Human too close, accelerate
-            new_max_moving_speed = 1.3 * self._speed_ratio * self.max_moving_speed
-            new_max_angular_speed = 1.3 * self._speed_ratio * self.max_angular_speed
+            self.current_max_moving_speed = self.max_moving_speed * 1.2
+            self.current_max_angular_speed = self.max_angular_speed * 1.2
             status = "TooClose"
             self._is_human_lost = False
             self._human_lost_start_time = None
-            self.get_logger().info(f"TooClose  ---> Distance:{human_distance:.2f}, moving_speed:{new_max_moving_speed:.2f}, angular_speed:{new_max_angular_speed:.2f}")
+            self.get_logger().info(f"TooClose  ---> Distance:{human_distance:.2f}, moving_speed:{self.current_max_moving_speed:.2f}, angular_speed:{self.current_max_angular_speed:.2f}")
         elif human_distance > self.normal_distance_max:
+
             if human_distance > self.lost_distance_threshold:
-                # Human lost
-                new_max_moving_speed = 0.05
-                new_max_angular_speed = 0.1
                 status = "Lost"
-                self.get_logger().warn(f"Lost      ---> Distance:{human_distance:.2f}, moving_speed:{new_max_moving_speed:.2f}, angular_speed:{new_max_angular_speed:.2f}")
+                self.get_logger().warn(f"Lost      ---> Distance:{human_distance:.2f}")
+                
                 if not self._is_human_lost:
                     self._is_human_lost = True
                     self._human_lost_start_time = current_time
@@ -308,34 +331,43 @@ class GuidanceActionServer(Node):
                     self.get_logger().error(f"Human lost for {self.lost_timeout_sec} seconds, aborting action")
                     status = "ABORTING"
                     return status
+                else: 
+                    # smooth deceleration
+                    self.current_max_moving_speed *= 0.8
+                    self.current_max_angular_speed *= 0.8
+
+                self.get_logger().warn(f"Lost      ---> Distance:{human_distance:.2f}, moving_speed:{self.current_max_moving_speed:.2f}, angular_speed:{self.current_max_angular_speed:.2f}")
             else:
                 # Human lagging, smooth deceleration
-                k = (self._speed_ratio * self.max_moving_speed - 0.05) / (self.lost_distance_threshold - self.normal_distance_max)
-                new_max_moving_speed = self._speed_ratio * self.max_moving_speed - k * (human_distance - self.normal_distance_max)
-                new_max_angular_speed = self._speed_ratio * self.max_angular_speed - k * (human_distance - self.normal_distance_max)
+                k = (self.max_moving_speed - 0.05) / (self.lost_distance_threshold - self.normal_distance_max)
+                self.current_max_moving_speed = self.max_moving_speed - k * (human_distance - self.normal_distance_max)
+                self.current_max_angular_speed = self.max_angular_speed - k * (human_distance - self.normal_distance_max)
                 status = "Lagging"
                 self._is_human_lost = False
                 self._human_lost_start_time = None
-                self.get_logger().info(f"Lagging   ---> Distance:{human_distance:.2f}, moving_speed:{new_max_moving_speed:.2f}, angular_speed:{new_max_angular_speed:.2f}")
+                self.get_logger().info(f"Lagging   ---> Distance:{human_distance:.2f}, moving_speed:{self.current_max_moving_speed:.2f}, angular_speed:{self.current_max_angular_speed:.2f}")
         else:
             # Normal following
-            new_max_moving_speed = self._speed_ratio * self.max_moving_speed
-            new_max_angular_speed = self._speed_ratio * self.max_angular_speed
+            self.current_max_moving_speed = self.max_moving_speed
+            self.current_max_angular_speed = self.max_angular_speed
             status = "Following"
             self._is_human_lost = False
             self._human_lost_start_time = None
-            self.get_logger().info(f"Following ---> Distance:{human_distance:.2f}, moving_speed:{new_max_moving_speed:.2f}, angular_speed:{new_max_angular_speed:.2f}")
-
+            self.get_logger().info(f"Following ---> Distance:{human_distance:.2f}, moving_speed:{self.current_max_moving_speed:.2f}, angular_speed:{self.current_max_angular_speed:.2f}")
+        
+        self.publish_set_max_speed(self.current_max_moving_speed, self.current_max_angular_speed)
+        
         # Update speed if changed
-        if (self._last_max_moving_speed is None or abs(new_max_moving_speed - self._last_max_moving_speed) > 0.01) \
-                and (current_time - self._last_speed_change_time).nanoseconds / 1e9 > 1.0:  # Adjust speed every 1 second:
+        if (self._last_max_moving_speed is None or abs(self.current_max_moving_speed - self._last_max_moving_speed) > 0.01) \
+                and (current_time - self._last_speed_change_time).nanoseconds / 1e9 > 0.1:  # Adjust speed every 1 second:
             
-            success = await self.set_max_speed(new_max_moving_speed, new_max_angular_speed)
+            success = await self.set_max_speed(self.current_max_moving_speed, self.current_max_angular_speed)
+            
             if not success:
                 self.get_logger().error("Speed adjustment failed, service failure")
                 return status
             
-            self._last_max_moving_speed = new_max_moving_speed
+            self._last_max_moving_speed = self.current_max_moving_speed
             self._last_speed_change_time = current_time
 
         return status
@@ -359,12 +391,12 @@ class GuidanceActionServer(Node):
     async def execute_callback(self, goal_handle):
         """Execute the guidance action with human following."""
         target_pose = goal_handle.request.target_pose
-        self._speed_ratio = goal_handle.request.speed_ratio
+        speed_ratio = goal_handle.request.speed_ratio
         user_id = goal_handle.request.user_id
         feedback_msg = Guidance.Feedback()
         result = Guidance.Result()
 
-        self.publish_move_to(target_pose, self._speed_ratio)
+        self.publish_move_to(target_pose, speed_ratio)
         
         # Confirm the AMR has received the action and the target point exists
         _waiting_timeout = self.stuck_timeout_sec / 2
@@ -374,18 +406,24 @@ class GuidanceActionServer(Node):
         while rclpy.ok():
 
             current_state = self._get_status(self.amr_events)
+            # Publish feedback
+            if self.current_pose:
+                feedback_msg.current_pose = self.current_pose
+            feedback_msg.status = current_state
+            goal_handle.publish_feedback(feedback_msg)
+            
             if current_state == "DEVICE_ERROR_DETECTED":
                 self.get_logger().error('Device error detected on the AMR!')
                 timeout_message = f"Failed to dismiss the AMR device error warning within {_waiting_timeout} seconds."
                 result.message = "Goal aborted due to a device error on the AMR."
-                self.publish_move_to(target_pose, self._speed_ratio)  # Try to publish again
+                self.publish_move_to(target_pose, speed_ratio)  # Try to publish again
             elif not self.remaining_targets:
                 self.get_logger().warn('Waiting for the AMR remaining target points.')
                 timeout_message = f"Waiting for the AMR remaining target points for {_waiting_timeout} seconds."
                 result.message = "Goal aborted because no valid target points exist."
-                self.publish_move_to(target_pose, self._speed_ratio)  # Try to publish again
+                self.publish_move_to(target_pose, speed_ratio)  # Try to publish again
             else:
-                if not self.global_path and not self._is_goal_reached(self.current_pose, target_pose):
+                if not self.global_path and not self._is_goal_reached(self.current_pose, target_pose, with_yaw=False):
                     self.get_logger().warn('Try to find a path to the target pose.')
                     timeout_message = f"Failed to find a valid path to the target within {_waiting_timeout} seconds."
                     result.message = "Goal aborted because the target pose is unreachable."
@@ -461,7 +499,7 @@ class GuidanceActionServer(Node):
             if self._is_human_lost and self._human_lost_start_time and \
                (self.get_clock().now() - self._human_lost_start_time).nanoseconds / 1e9 > self.lost_timeout_sec:
                 if human_distance <= self.lost_distance_threshold:
-                    await self._resume_navigation(target_pose, self._speed_ratio)
+                    await self._resume_navigation(target_pose, speed_ratio)
                     self._is_human_lost = False
                     self._human_lost_start_time = None
 
@@ -474,8 +512,8 @@ class GuidanceActionServer(Node):
             """Check whether the goal is completed"""
             if self.current_pose and not self.remaining_targets:
                 if self._is_goal_reached(self.current_pose, target_pose):
-                    await self.set_max_speed(self._speed_ratio * self.max_moving_speed, 
-                                            self._speed_ratio * self.max_angular_speed)
+                    await self.set_max_speed(self.max_moving_speed, self.max_angular_speed)
+                    self.publish_set_max_speed(self.max_moving_speed, self.max_angular_speed)
                     goal_handle.succeed()
                     result.success = True
                     result.message = "Goal achieved successfully."
