@@ -202,6 +202,7 @@ namespace slamware_ros_sdk {
         auto wkDat = mutableWorkData();
 
         // send TF transform
+        /*
         if (srvParams.getParameter<bool>("fixed_odom_map_tf"))
         {
             geometry_msgs::msg::TransformStamped t;
@@ -217,6 +218,7 @@ namespace slamware_ros_sdk {
             t.transform.rotation.w = 1;
             tfBrdcst->sendTransform(t);
         }
+        */
 
         // check power
         //int battPercentage = pltfm.getBatteryPercentage();
@@ -228,6 +230,7 @@ namespace slamware_ros_sdk {
         wkDat->robotPose = robotPose;
 
         // publish robot_pose transform
+        /*
         geometry_msgs::msg::TransformStamped t;
         t.header.stamp = rclcpp::Clock().now();
         t.header.frame_id = srvParams.getParameter<std::string>("robot_pose_frame");
@@ -242,9 +245,10 @@ namespace slamware_ros_sdk {
         t.transform.rotation.z = q.z();
         t.transform.rotation.w = q.w();
         tfBrdcst->sendTransform(t);
+        */
 
         geometry_msgs::msg::PoseStamped msgRobotPose;
-        msgRobotPose.header.frame_id = srvParams.getParameter<std::string>("robot_pose_frame");
+        msgRobotPose.header.frame_id = srvParams.getParameter<std::string>("map_frame");
         msgRobotPose.header.stamp = rclcpp::Clock().now();
         sltcToRosMsg(robotPose, msgRobotPose.pose);
         pubRobotPose_->publish(msgRobotPose);
@@ -580,7 +584,7 @@ namespace slamware_ros_sdk {
         const auto& points = tLs.getLaserPoints();
         if (points.size() < 2)
         {
-            RCLCPP_ERROR(rclcpp::get_logger("server workers"), "laser points count: %u, too small, skip publish.", (unsigned int)points.size());
+            //RCLCPP_ERROR(rclcpp::get_logger("server workers"), "laser points count: %u, too small, skip publish.", (unsigned int)points.size());
             return;
         }
 
@@ -626,9 +630,10 @@ namespace slamware_ros_sdk {
             geometry_msgs::msg::TransformStamped t;
 
             t.header.stamp = startScanTime;
-            t.header.frame_id = srvParams.getParameter<std::string>("map_frame"); // srvParams.map_frame;
+            t.header.frame_id = srvParams.getParameter<std::string>("robot_frame"); // srvParams.map_frame;
             t.child_frame_id = srvParams.getParameter<std::string>("laser_frame"); // srvParams.laser_frame.c_str();
-
+            
+            /*
             t.transform.translation.x = laserPose.x();
             t.transform.translation.y = laserPose.y();
             t.transform.translation.z = 0.0;
@@ -639,6 +644,15 @@ namespace slamware_ros_sdk {
             t.transform.rotation.y = q.y();
             t.transform.rotation.z = q.z();
             t.transform.rotation.w = q.w();
+            */
+
+            t.transform.translation.x = 0.0;
+            t.transform.translation.y = 0.0;
+            t.transform.translation.z = 0.0;
+            t.transform.rotation.x = 0;
+            t.transform.rotation.y = 0;
+            t.transform.rotation.z = 0;
+            t.transform.rotation.w = 1;
 
             tfBrdcst->sendTransform(t);
         }

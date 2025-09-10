@@ -10,8 +10,6 @@ def generate_launch_description():
     # Define launch arguments
     ip_address = LaunchConfiguration('ip_address', default='192.168.12.1')
     port = LaunchConfiguration('port', default='1445')
-    move_base_goal_topic = LaunchConfiguration('move_base_goal_topic', default='/move_base_simple/goal')
-    raw_ladar_data = LaunchConfiguration('raw_ladar_data', default='false')
     enable_rviz = LaunchConfiguration('enable_rviz', default='true')
 
     # Get the share directory of slamware_ros_sdk
@@ -23,16 +21,6 @@ def generate_launch_description():
             'ip_address',
             default_value='192.168.12.1',
             description='IP address for the SLAMWARE SDK server'
-        ),
-        DeclareLaunchArgument(
-            'move_base_goal_topic',
-            default_value='/move_base_simple/goal',
-            description='Topic for move base goal'
-        ),
-        DeclareLaunchArgument(
-            'raw_ladar_data',
-            default_value='false',
-            description='Whether to publish raw ladar data'
         ),
         DeclareLaunchArgument(
             'enable_rviz',
@@ -48,10 +36,10 @@ def generate_launch_description():
             output='both',
             parameters=[
                 {'ip_address': ip_address},
-                {'port': port},
+                {'robot_port': port},
                 {'angle_compensate': True},
                 {'fixed_odom_map_tf': True},
-                {'raw_ladar_data': raw_ladar_data},
+                {'raw_ladar_data': False},
                 {'robot_frame': 'base_link'},
                 {'odom_frame': 'odom'},
                 {'laser_frame': 'laser'},
