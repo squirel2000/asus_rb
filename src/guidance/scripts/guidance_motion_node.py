@@ -309,20 +309,20 @@ class GuidanceActionServer(Node):
         current_time = self.get_clock().now()
         
         # Speed adjustment logic
-        status = "Following"
+        status = "USER_FOLLOWING"
         if human_distance < self.normal_distance_min:
             # Human too close, accelerate
             self.current_max_moving_speed = self.max_moving_speed * 1.2
             self.current_max_angular_speed = self.max_angular_speed * 1.2
-            status = "TooClose"
+            status = "USER_TOO_CLOSE"
             self._is_human_lost = False
             self._human_lost_start_time = None
-            self.get_logger().info(f"TooClose  ---> Distance:{human_distance:.2f}, moving_speed:{self.current_max_moving_speed:.2f}, angular_speed:{self.current_max_angular_speed:.2f}")
+            self.get_logger().info(f"USER_TOO_CLOSE ---> Distance:{human_distance:.2f}, Adjust speed to - linear:{self.current_max_moving_speed:.2f}, angular:{self.current_max_angular_speed:.2f}")
         elif human_distance > self.normal_distance_max:
 
             if human_distance > self.lost_distance_threshold:
-                status = "Lost"
-                self.get_logger().warn(f"Lost      ---> Distance:{human_distance:.2f}")
+                status = "USER_NOT_FOUND"
+                self.get_logger().warn(f"USER_NOT_FOUND ---> Distance:{human_distance:.2f}")
                 
                 if not self._is_human_lost:
                     self._is_human_lost = True
@@ -336,24 +336,24 @@ class GuidanceActionServer(Node):
                     self.current_max_moving_speed *= 0.8
                     self.current_max_angular_speed *= 0.8
 
-                self.get_logger().warn(f"Lost      ---> Distance:{human_distance:.2f}, moving_speed:{self.current_max_moving_speed:.2f}, angular_speed:{self.current_max_angular_speed:.2f}")
+                self.get_logger().warn(f"USER_NOT_FOUND ---> Distance:{human_distance:.2f}, Adjust speed to - linear:{self.current_max_moving_speed:.2f}, angular:{self.current_max_angular_speed:.2f}")
             else:
                 # Human lagging, smooth deceleration
                 k = (self.max_moving_speed - 0.05) / (self.lost_distance_threshold - self.normal_distance_max)
                 self.current_max_moving_speed = self.max_moving_speed - k * (human_distance - self.normal_distance_max)
                 self.current_max_angular_speed = self.max_angular_speed - k * (human_distance - self.normal_distance_max)
-                status = "Lagging"
+                status = "USER_LAGGING_BEHIND"
                 self._is_human_lost = False
                 self._human_lost_start_time = None
-                self.get_logger().info(f"Lagging   ---> Distance:{human_distance:.2f}, moving_speed:{self.current_max_moving_speed:.2f}, angular_speed:{self.current_max_angular_speed:.2f}")
+                self.get_logger().info(f"USER_LAGGING_BEHIND ---> Distance:{human_distance:.2f}, Adjust speed to - linear:{self.current_max_moving_speed:.2f}, angular:{self.current_max_angular_speed:.2f}")
         else:
             # Normal following
             self.current_max_moving_speed = self.max_moving_speed
             self.current_max_angular_speed = self.max_angular_speed
-            status = "Following"
+            status = "USER_FOLLOWING"
             self._is_human_lost = False
             self._human_lost_start_time = None
-            self.get_logger().info(f"Following ---> Distance:{human_distance:.2f}, moving_speed:{self.current_max_moving_speed:.2f}, angular_speed:{self.current_max_angular_speed:.2f}")
+            self.get_logger().info(f"USER_FOLLOWING ---> Distance:{human_distance:.2f}, Adjust speed to - linear:{self.current_max_moving_speed:.2f}, angular:{self.current_max_angular_speed:.2f}")
         
         self.publish_set_max_speed(self.current_max_moving_speed, self.current_max_angular_speed)
         
@@ -492,7 +492,7 @@ class GuidanceActionServer(Node):
             guiding_stage = await self._adjust_speed_and_handle_lost(human_distance)
 
             if guiding_stage == "ABORTING":
-                result = await self._abort_goal(goal_handle, "Goal aborted due to human lost.")
+                result = await self._abort_goal(goal_handle, "Goal aborted due to failure to detect the human follower after timeout.")
                 return result
 
             """Check if human is lost and needs to resume navigation"""
@@ -506,7 +506,7 @@ class GuidanceActionServer(Node):
             """Publish feedback if current pose is available"""
             if self.current_pose:
                 feedback_msg.current_pose = self.current_pose
-                feedback_msg.status = f"{current_state} - {guiding_stage}"
+                feedback_msg.status = f"{current_state}, {guiding_stage}"
                 goal_handle.publish_feedback(feedback_msg)
 
             """Check whether the goal is completed"""
