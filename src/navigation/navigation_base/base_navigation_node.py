@@ -92,22 +92,6 @@ class BaseNavigationNode(Node):
         self.amr_events = ast.literal_eval(msg.data)
         self.get_logger().debug(f"AMR's events : {self.amr_events}")
 
-    def goal_callback(self, goal_request):
-        """Accept or reject a client request to begin an action."""
-        self.get_logger().info('|----------------------------------------|')
-        self.get_logger().info('Received goal request')
-        return GoalResponse.ACCEPT
-
-    def handle_accepted_callback(self, goal_handle):
-        """A new goal has been accepted."""
-        self.get_logger().info('Goal accepted, starting execution.')
-        goal_handle.execute()
-
-    def cancel_callback(self, goal_handle):
-        """Accept or reject a client request to cancel an action."""
-        self.get_logger().info('Received cancel request.')
-        return CancelResponse.ACCEPT
-
     def publish_move_to(self, pose: PoseStamped, speed_ratio: float):
         """Publish a MoveToRequest message with the given pose."""
         msg = MoveToRequest()
@@ -136,7 +120,7 @@ class BaseNavigationNode(Node):
         msg = CancelActionRequest()
         self.publisher_cancel.publish(msg)
         self.get_logger().info(f'Published CancelActionRequest.')
-        # await self.ros_async_sleep(0)  # 添加空的 await 操作以消除警告
+        # await self.ros_async_sleep(0)  # empty await to ignore python warning
 
     def _is_goal_reached(self, current_pose: PoseStamped, target_pose: PoseStamped, with_yaw=True) -> bool:
         """Check if the robot has reached the target pose (position and yaw)."""
@@ -207,16 +191,23 @@ class BaseNavigationNode(Node):
         else:
             return "NAVIGATING_TO_TARGET"
 
-    async def _abort_goal(self, goal_handle, message: str):
-        """Helper method to abort the goal with a specific message."""
-        await self.publish_cancel()
-        goal_handle.abort()
-        result = goal_handle.action_type.Result()
-        result.success = False
-        result.message = message
-        self.get_logger().info(message)
-        return result
 
+    def goal_callback(self, goal_request):
+        """Accept or reject a client request to begin an action."""
+        self.get_logger().info('|----------------------------------------|')
+        self.get_logger().info('Received goal request')
+        return GoalResponse.ACCEPT
+
+    def handle_accepted_callback(self, goal_handle):
+        """A new goal has been accepted."""
+        self.get_logger().info('Goal accepted, starting execution.')
+        goal_handle.execute()
+
+    def cancel_callback(self, goal_handle):
+        """Accept or reject a client request to cancel an action."""
+        self.get_logger().info('Received cancel request.')
+        return CancelResponse.ACCEPT
+    
     async def execute_callback(self, goal_handle):
         """Base execution logic, to be overridden by subclasses."""
         raise NotImplementedError("execute_callback must be implemented in subclasses")

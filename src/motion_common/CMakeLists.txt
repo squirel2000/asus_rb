@@ -6,16 +6,19 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(rclcpp_action REQUIRED)
+find_package(action_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
-#rosidl_generate_interfaces(${PROJECT_NAME}
-#  "action/Navigate.action"
-#  "action/Guidance.action"
-#  "action/FollowUser.action"
-#  DEPENDENCIES action_msgs geometry_msgs
-#)
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "action/Navigate.action"
+  "action/Guidance.action"
+  "action/FollowUser.action"
+  DEPENDENCIES action_msgs geometry_msgs
+)
 
 install(DIRECTORY
   launch

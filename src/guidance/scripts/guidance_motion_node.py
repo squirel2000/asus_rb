@@ -6,8 +6,7 @@ from rclpy.executors import MultiThreadedExecutor
 from geometry_msgs.msg import PoseStamped, Twist
 from perception_control_manager.srv import SetMaxSpeed
 from navigation_base.base_navigation_node import BaseNavigationNode
-
-from guidance.action import Guidance
+from motion_common.action import Guidance
 
 class GuidanceActionServer(BaseNavigationNode):
     """
@@ -199,10 +198,15 @@ class GuidanceActionServer(BaseNavigationNode):
         self.publish_set_max_speed(self.max_moving_speed, self.max_angular_speed)
 
     async def _abort_goal(self, goal_handle, message: str):
-        """Override base _abort_goal for guidance-specific cleanup."""
+        """Helper method to abort the goal with a specific message."""
         await self.publish_cancel()
-        return await super()._abort_goal(goal_handle, message)
-
+        goal_handle.abort()
+        result = Guidance.Result()
+        result.success = False
+        result.message = message
+        self.get_logger().info(result.message)
+        return result
+    
     async def execute_callback(self, goal_handle):
         """Executes the guidance action with human following."""
         target_pose = goal_handle.request.target_pose

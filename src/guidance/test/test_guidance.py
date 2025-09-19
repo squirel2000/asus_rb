@@ -4,7 +4,7 @@ from rclpy.action import ActionClient
 from rclpy.node import Node
 
 from geometry_msgs.msg import PoseStamped, Quaternion
-from guidance.action import Guidance
+from motion_common.action import Guidance
 import math
 
 def create_pose_stamped(node: Node, x, y, yaw):

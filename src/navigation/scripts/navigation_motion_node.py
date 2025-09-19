@@ -4,8 +4,7 @@ import rclpy
 from rclpy.action import ActionServer
 from rclpy.executors import MultiThreadedExecutor
 from navigation_base.base_navigation_node import BaseNavigationNode
-
-from navigation.action import Navigate
+from motion_common.action import Navigate
 
 class NavigateActionServer(BaseNavigationNode):
     """
@@ -35,6 +34,16 @@ class NavigateActionServer(BaseNavigationNode):
             f"stuck_distance_threshold={self.stuck_distance_threshold:.2f}"
         )
 
+    async def _abort_goal(self, goal_handle, message: str):
+        """Helper method to abort the goal with a specific message."""
+        await self.publish_cancel()
+        goal_handle.abort()
+        result = Navigate.Result()
+        result.success = False
+        result.message = message
+        self.get_logger().info(result.message)
+        return result
+    
     async def execute_callback(self, goal_handle):
         """Executes the navigation action by publishing to slamware_ros_sdk topics."""
         target_pose = goal_handle.request.target_pose
