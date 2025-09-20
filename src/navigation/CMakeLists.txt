@@ -26,8 +26,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 
 
 # --- Python Configuration ---
-# This installs the Python modules located in the "follow_user" directory
-# ament_python_install_package(${PROJECT_NAME})
+# This installs the Python modules located in the "navigation_base" directory
+ament_python_install_package(${PROJECT_NAME}_base)
 
 
 # This installs the Python scripts located in the "scripts" directory as executables

@@ -138,7 +138,7 @@ class TaskCoordinatorNode(Node):
 
         goal_msg = Navigate.Goal()
         goal_msg.target_pose = goal_handle.request.target_pose
-
+        goal_msg.speed_ratio = 1.0
         self.get_logger().info('Sending goal to Navigate action server...')
         send_goal_future = self.navigate_client.send_goal_async(
             goal_msg,

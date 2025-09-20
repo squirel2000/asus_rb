@@ -54,3 +54,6 @@ qtcreator-*
 
 # Catkin custom files
 CATKIN_IGNORE
+
+# Ignore Slamware SDK (it's a large file)
+/src/slamware_sdk

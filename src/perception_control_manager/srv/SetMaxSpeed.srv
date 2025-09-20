@@ -1,0 +1,4 @@
+float32 max_moving_speed
+float32 max_angular_speed
+---
+bool success

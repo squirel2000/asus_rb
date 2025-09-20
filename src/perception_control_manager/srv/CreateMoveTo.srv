@@ -1,0 +1,4 @@
+slamware_ros_sdk/MoveToRequest target
+---
+bool success
+string action_id
