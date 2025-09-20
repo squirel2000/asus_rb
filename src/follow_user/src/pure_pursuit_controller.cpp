@@ -36,12 +36,13 @@ public:
         this->declare_parameter("min_heading_error_for_motion", 0.35); // 20 degrees
         this->declare_parameter("min_approach_linear_velocity", 0.05);
         this->declare_parameter("approach_velocity_scaling_dist", 0.6);
-        this->declare_parameter("goal_dist_tol", 0.25);
+        this->declare_parameter("goal_dist_buf", 0.15);
+        this->declare_parameter("goal_dist_tol", 0.075);
         this->declare_parameter("path_topic", "/follow_user/planned_path");
         this->declare_parameter("odom_topic", "/slamware_ros_sdk_server_node/odom");
         this->declare_parameter("cmd_vel_topic", "/cmd_vel");
-        this->declare_parameter("base_frame", "base_link");
-        this->declare_parameter("global_frame", "odom");  // Change to slamware_map
+        this->declare_parameter("base_frame", "base_link"); // This should match the robot's base frame
+        this->declare_parameter("global_frame", "slamware_map");  // This should match the path's frame
         this->declare_parameter("controller_frequency", 20.0);
         this->declare_parameter("linear_acceleration", 0.3);
         this->declare_parameter("linear_deceleration", 0.6);
@@ -66,6 +67,7 @@ public:
         min_heading_error_for_motion_ = this->get_parameter("min_heading_error_for_motion").as_double();
         min_approach_linear_velocity_ = this->get_parameter("min_approach_linear_velocity").as_double();
         approach_velocity_scaling_dist_ = this->get_parameter("approach_velocity_scaling_dist").as_double();
+        goal_dist_buf_ = this->get_parameter("goal_dist_buf").as_double();
         goal_dist_tol_ = this->get_parameter("goal_dist_tol").as_double();
         path_topic_ = this->get_parameter("path_topic").as_string();
         odom_topic_ = this->get_parameter("odom_topic").as_string();
@@ -137,8 +139,6 @@ private:
             have_last_odom_stamp_ = true;
         }
         last_odom_stamp_ = odom_time;
-
-        current_velocity_ = msg->twist.twist.linear.x;
 
         // Update EMA of dt for diagnostics
         if (last_odom_dt_.has_value()) {
@@ -219,21 +219,6 @@ private:
         cmd_vel.linear.x = 0.0;
         cmd_vel.angular.z = 0.0;
 
-        // Compute raw target_velocity based on distance to goal and update EMA
-        double dist_to_goal = std::hypot(
-            robot_pose.pose.position.x - current_path_.poses.back().pose.position.x,
-            robot_pose.pose.position.y - current_path_.poses.back().pose.position.y);
-        double raw_target_velocity;
-        if (dist_to_goal < approach_velocity_scaling_dist_) {
-            double scale = dist_to_goal / approach_velocity_scaling_dist_;
-            raw_target_velocity = std::max(min_approach_linear_velocity_, scale * desired_linear_vel_);
-        } else {
-            raw_target_velocity = desired_linear_vel_;
-        }
-        if (!target_velocity_ema_.has_value()) target_velocity_ema_ = raw_target_velocity;
-        else target_velocity_ema_ = target_velocity_ema_.value() * (1.0 - target_velocity_ema_alpha_) + raw_target_velocity * target_velocity_ema_alpha_;
-
-        // Now get lookahead using the filtered/EMA target velocity
         geometry_msgs::msg::PoseStamped carrot_pose;
         if (!getLookaheadPoint(robot_pose, carrot_pose)) {
             RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "Could not find a lookahead point. Stopping.");
@@ -265,13 +250,39 @@ private:
             RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000, "Aligning with scaled speed. Scale: %.2f", speed_scale);
         }
 
-        // If rotation-only is requested, tell calculateSpeed to aim for zero so it will ramp down
-        std::optional<double> target_override = std::nullopt;
-        if (speed_scale == 0.0) target_override = 0.0;
+        // Determine the target velocity based on distance to goal
+        double dist_to_goal = std::hypot(
+            robot_pose.pose.position.x - current_path_.poses.back().pose.position.x,
+            robot_pose.pose.position.y - current_path_.poses.back().pose.position.y);
 
-        double linear_vel = calculateSpeed(robot_pose, target_override);
-        // After calculateSpeed has produced a smoothed current_velocity_, scale final output
-        linear_vel *= speed_scale;
+        double goal_approach_target_vel;
+        if (dist_to_goal > approach_velocity_scaling_dist_) {
+            goal_approach_target_vel = desired_linear_vel_;
+        } else if (dist_to_goal > goal_dist_buf_) {
+            // Stage 1: Scale from desired_linear_vel_ down to min_approach_linear_velocity
+            double range = approach_velocity_scaling_dist_ - goal_dist_buf_;
+            double scale = (dist_to_goal - goal_dist_buf_) / std::max(range, 1e-4);
+            goal_approach_target_vel = min_approach_linear_velocity_ + scale * (desired_linear_vel_ - min_approach_linear_velocity_);
+        } else if (dist_to_goal > goal_dist_tol_) {
+            // Stage 2: Scale from min_approach_linear_velocity down to a slower speed (e.g., 0.025)
+            double final_crawl_vel = 0.025;
+            double range = goal_dist_buf_ - goal_dist_tol_;
+            double scale = (dist_to_goal - goal_dist_tol_) / std::max(range, 1e-4);
+            goal_approach_target_vel = final_crawl_vel + scale * (min_approach_linear_velocity_ - final_crawl_vel);
+        } else {
+            // Stage 3: Scale from the final crawl speed down to zero
+            double final_crawl_vel = 0.025;
+            double range = goal_dist_tol_;
+            double scale = dist_to_goal / std::max(range, 1e-4);
+            goal_approach_target_vel = scale * final_crawl_vel;
+        }
+        // Ensure velocity is always clamped between 0 and desired.
+        goal_approach_target_vel = std::clamp(goal_approach_target_vel, 0.0, desired_linear_vel_);
+
+        // The final target velocity is the minimum of the goal approach speed and the turning-scaled speed
+        double final_target_velocity = goal_approach_target_vel * speed_scale;
+
+        double linear_vel = calculateSpeed(final_target_velocity);
 
         // Publish speed_scale for debugging
         if (dbg_speed_scale_pub_) {
@@ -292,43 +303,34 @@ private:
             return cmd_vel; // zero velocity
         }
 
-        // If we are only rotating, use a simple proportional controller on heading error
-        if (speed_scale == 0.0) {
-            cmd_vel.angular.z = std::copysign(0.7 * max_angular_vel_, heading_error);
-        } else {
-             double lookahead_dist = std::hypot(carrot_pose.pose.position.x - robot_pose.pose.position.x,
-                                               carrot_pose.pose.position.y - robot_pose.pose.position.y);
-            // Avoid division by zero if lookahead distance is tiny
-            if (std::abs(lookahead_dist) < 0.01) {
-                lookahead_dist = 0.01;
-            }
-            double curvature = 2.0 * sin(angle_to_carrot_robot_frame) / lookahead_dist;
-            cmd_vel.angular.z = linear_vel * curvature;
-        }
+        // --- Blended Angular Velocity Calculation ---
+        // 1. Calculate the pure rotation command (used when heading error is large)
+        double pure_rotation_w = std::copysign(0.7 * max_angular_vel_, heading_error);
+
+        // 2. Calculate the standard pure pursuit command (used when aligned with path)
+        double lookahead_dist_for_curve = std::hypot(carrot_pose.pose.position.x - robot_pose.pose.position.x,
+                                           carrot_pose.pose.position.y - robot_pose.pose.position.y);
+        lookahead_dist_for_curve = std::max(lookahead_dist_for_curve, 0.01); // Avoid division by zero
+        double pure_pursuit_curvature = 2.0 * sin(angle_to_carrot_robot_frame) / lookahead_dist_for_curve;
+        double pure_pursuit_w = linear_vel * pure_pursuit_curvature;
+
+        // 3. Blend the two commands based on the speed_scale factor.
+        cmd_vel.angular.z = (1.0 - speed_scale) * pure_rotation_w + speed_scale * pure_pursuit_w;
 
         cmd_vel.linear.x = linear_vel;
         cmd_vel.angular.z = std::clamp(cmd_vel.angular.z, -max_angular_vel_, max_angular_vel_);
         
+        // Add detailed logging for velocity calculation diagnostics
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 250, 
+            "dist_goal: %.2f, goal_v: %.2f, scale: %.2f, target_v: %.2f, current_v: %.2f, cmd_v: %.2f, cmd_w: %.2f",
+            dist_to_goal, goal_approach_target_vel, speed_scale, final_target_velocity, commanded_velocity_, cmd_vel.linear.x, cmd_vel.angular.z);
+
         return cmd_vel;
     }
 
     // calculateSpeed optionally accepts a target override (e.g., 0.0 to ramp to stop for rotation)
-    double calculateSpeed(const geometry_msgs::msg::PoseStamped & robot_pose, std::optional<double> target_override = std::nullopt)
+    double calculateSpeed(double target_velocity)
     {
-        double dist_to_goal = std::hypot(
-            robot_pose.pose.position.x - current_path_.poses.back().pose.position.x,
-            robot_pose.pose.position.y - current_path_.poses.back().pose.position.y);
-
-        double target_velocity;
-        if (target_override.has_value()) {
-            target_velocity = target_override.value();
-        } else if (dist_to_goal < approach_velocity_scaling_dist_) {
-            double scale = dist_to_goal / approach_velocity_scaling_dist_;
-            target_velocity = std::max(min_approach_linear_velocity_, scale * desired_linear_vel_);
-        } else {
-            target_velocity = desired_linear_vel_;
-        }
-
         // Update filtered target velocity (EMA) used for lookahead and integration
         if (!target_velocity_ema_.has_value()) {
             target_velocity_ema_ = target_velocity;
@@ -336,7 +338,7 @@ private:
             target_velocity_ema_ = target_velocity_ema_.value() * (1.0 - target_velocity_ema_alpha_) + target_velocity * target_velocity_ema_alpha_;
         }
 
-        double velocity_error = target_velocity_ema_.value() - current_velocity_;
+        double velocity_error = target_velocity_ema_.value() - commanded_velocity_;
         // Use the measured dt from odomCallback when available, otherwise fall back
         double dt = last_odom_dt_.has_value() ? last_odom_dt_.value() : (1.0 / controller_frequency_);
         // Clamp dt as a safety measure
@@ -345,30 +347,30 @@ private:
         double new_velocity;
         if (velocity_error > 0) {
             // Accelerate toward the filtered target but do not exceed it
-            new_velocity = std::min(target_velocity_ema_.value(), current_velocity_ + std::abs(linear_acceleration_) * dt);
+            new_velocity = std::min(target_velocity_ema_.value(), commanded_velocity_ + std::abs(linear_acceleration_) * dt);
         } else {
             // Decelerate toward the filtered target but do not go below it
-            new_velocity = std::max(target_velocity_ema_.value(), current_velocity_ - std::abs(linear_deceleration_) * dt);
+            new_velocity = std::max(target_velocity_ema_.value(), commanded_velocity_ - std::abs(linear_deceleration_) * dt);
         }
 
-        current_velocity_ = std::clamp(new_velocity, 0.0, max_linear_vel_);
+        commanded_velocity_ = std::clamp(new_velocity, 0.0, max_linear_vel_);
 
         // publish debug topics for tuning
         if (dbg_target_vel_pub_) {
             std_msgs::msg::Float64 m; m.data = target_velocity_ema_.value(); dbg_target_vel_pub_->publish(m);
         }
         if (dbg_current_vel_pub_) {
-            std_msgs::msg::Float64 m; m.data = current_velocity_; dbg_current_vel_pub_->publish(m);
+            std_msgs::msg::Float64 m; m.data = commanded_velocity_; dbg_current_vel_pub_->publish(m);
         }
 
-        return current_velocity_;
+        return commanded_velocity_;
     }
 
     bool getLookaheadPoint(const geometry_msgs::msg::PoseStamped& robot_pose,
                            geometry_msgs::msg::PoseStamped& lookahead_point)
     {
-        // Use the filtered target velocity for lookahead if available, otherwise fallback to current_velocity_
-        double vel_for_lookahead = target_velocity_ema_.has_value() ? target_velocity_ema_.value() : current_velocity_;
+        // Use the current velocity for lookahead calculation
+        double vel_for_lookahead = commanded_velocity_;
         double lookahead_dist = std::clamp(lookahead_time_ * vel_for_lookahead, min_lookahead_dist_, max_lookahead_dist_);
         
         size_t closest_segment_idx = findClosestPathSegment(robot_pose, last_path_segment_idx_);
@@ -561,6 +563,7 @@ private:
     double max_angular_vel_;
     double min_approach_linear_velocity_;
     double approach_velocity_scaling_dist_;
+    double goal_dist_buf_;
     double goal_dist_tol_;
     std::string path_topic_;
     std::string odom_topic_;
@@ -607,7 +610,7 @@ private:
     nav_msgs::msg::Path current_path_;
     bool path_received_ = false;
     bool goal_reached_ = true;
-    double current_velocity_ = 0.0;
+    double commanded_velocity_ = 0.0;
     size_t last_path_segment_idx_ = 0;
     bool is_moving_ = false;
     // Odom cache for TF fallback

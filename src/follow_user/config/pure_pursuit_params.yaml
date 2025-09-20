@@ -11,8 +11,8 @@ pure_pursuit_controller:
     max_linear_vel: 0.70                     # MODIFIED: Safety limit for max linear speed.
     max_angular_vel: 1.2                     # Maximum angular velocity
     min_approach_linear_velocity: 0.05       # Minimum velocity when approaching the goal.
-    approach_velocity_scaling_dist: 0.5      # Distance at which to start scaling down velocity when approaching the goal.
-
+    approach_velocity_scaling_dist: 1.0      # Distance at which to start scaling down velocity when approaching the goal.
+    
     # MODIFIED: Parameters for controlling turn-in-place vs. spiral behavior
     # If heading error > this value (rad), robot will stop and rotate in-place.
     heading_error_for_pure_rotation: 1.0 # 60 degrees
@@ -21,7 +21,8 @@ pure_pursuit_controller:
     min_heading_error_for_motion: 0.5  # 30 degrees
 
     # Tolerances
-    goal_dist_tol: 0.15                      # Goal tolerance in meters. Reduce for better accuracy.
+    goal_dist_buf: 0.15                      # Intermediate buffer distance for multi-stage goal approach.
+    goal_dist_tol: 0.075                      # Goal tolerance in meters. Reduce for better accuracy.
 
     # Topics and Frames
     path_topic: "/follow_user/planned_path"
