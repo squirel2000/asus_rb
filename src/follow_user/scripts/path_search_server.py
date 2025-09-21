@@ -6,9 +6,9 @@ from nav_msgs.msg import Path
 import requests
 import argparse
 
-class SearchPathClientNode(Node):
+class PathSearchServerNode(Node):
     def __init__(self, robot_ip):
-        super().__init__('search_path_client_node')
+        super().__init__('path_search_server_node')
         self.robot_ip = robot_ip
         self.subscription = self.create_subscription(PointStamped, '/clicked_point', self.clicked_point_callback, 10)
         self.path_publisher = self.create_publisher(Path, 'follow_user/planned_path', 10)
@@ -59,9 +59,9 @@ def main(args=None):
     parser.add_argument("--robot-ip", default="192.168.12.1", help="The IP address of the robot.")
     args, _ = parser.parse_known_args()
     
-    search_path_client_node = SearchPathClientNode(robot_ip=args.robot_ip)
-    rclpy.spin(search_path_client_node)
-    search_path_client_node.destroy_node()
+    path_search_server_node = PathSearchServerNode(robot_ip=args.robot_ip)
+    rclpy.spin(path_search_server_node)
+    path_search_server_node.destroy_node()
     rclpy.shutdown()
 
 if __name__ == '__main__':

@@ -26,6 +26,11 @@ find_package(rosidl_default_generators REQUIRED)
 # Add executable targets
 add_executable(pure_pursuit_controller src/pure_pursuit_controller.cpp)
 
+target_include_directories(pure_pursuit_controller PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
 # Specify libraries to link a library or executable target against
 ament_target_dependencies(pure_pursuit_controller
   rclcpp
@@ -43,6 +48,15 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# Install headers
+install(DIRECTORY include/
+  DESTINATION include
+)
+
+# Export include directories
+ament_export_include_directories(include)
+
+
 
 # --- Handle Action/Service/Message generation ---
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -59,7 +73,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 install(PROGRAMS
   scripts/follow_user_motion_node.py
   scripts/follow_user_vision_node.py
-  scripts/search_path_client.py
+  scripts/path_search_server.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

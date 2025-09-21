@@ -39,6 +39,8 @@ import math
 import random
 import time
 from typing import List, Tuple
+import os
+from ament_index_python.packages import get_package_share_directory
 
 import rclpy
 from rclpy.node import Node
@@ -46,6 +48,8 @@ from rclpy.qos import QoSProfile
 from geometry_msgs.msg import PointStamped, Point, Twist
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Float64
+import tf2_ros
+from tf2_ros import TransformException
 
 
 def load_path_from_json(path_file: str) -> List[Tuple[float, float]]:
@@ -76,10 +80,14 @@ class PersonSimulator(Node):
 		self.declare_parameter('offset_min', 1.0)
 		self.declare_parameter('offset_max', 3.0)
 		self.declare_parameter('offset_smooth_alpha', 0.1)
-		self.declare_parameter('log_file', 'person_sim_log.csv')
-		self.declare_parameter('frame_id', 'map')
-		# default to the test path JSON located in the test folder
-		self.declare_parameter('path_file', 'src/follow_user/test/path.json')
+		
+		script_dir = os.path.dirname(os.path.realpath(__file__))
+		default_log_file = os.path.join(script_dir, 'person_sim_log.csv')
+		self.declare_parameter('log_file', default_log_file)
+		self.declare_parameter('frame_id', 'slamware_map')
+		
+		default_path_file = os.path.join(script_dir, 'path.json')
+		self.declare_parameter('path_file', default_path_file)
 		self.declare_parameter('odom_topic', '/slamware_ros_sdk_server_node/odom')
 
 		self.publish_rate = float(self.get_parameter('publish_rate').value)
@@ -144,9 +152,6 @@ class PersonSimulator(Node):
 
 		# prepare CSV logging
 		try:
-			# default test log path inside test folder
-			if self.log_file == 'person_sim_log.csv':
-				self.log_file = 'src/follow_user/test/person_sim_log.csv'
 			self.csv_file = open(self.log_file, 'w', newline='')
 			self.csv_writer = csv.writer(self.csv_file)
 			header = ['time', 'clicked_x', 'clicked_y', 'target_velocity', 'current_velocity', 'speed_scale', 'cmd_vel_lin_x', 'cmd_vel_ang_z', 'pose_x', 'pose_y', 'pose_theta']
@@ -158,9 +163,26 @@ class PersonSimulator(Node):
 			self.csv_file = None
 			self.csv_writer = None
 
-		# timer
-		period = 1.0 / max(1e-3, float(self.publish_rate))
-		self.timer = self.create_timer(period, self.timer_cb)
+		# TF buffer and listener
+		self.tf_buffer = tf2_ros.Buffer()
+		self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
+		# Wait for TF to be ready before starting the simulation
+		self.wait_for_tf_timer = self.create_timer(1.0, self.wait_for_tf_callback)
+
+	def wait_for_tf_callback(self):
+		try:
+			# Check if the transform is available.
+			self.tf_buffer.lookup_transform('base_link', 'slamware_map', rclpy.time.Time())
+			self.get_logger().info('Transform from "slamware_map" to "base_link" is available. Starting person simulation.')
+			
+			# If transform is available, cancel this timer and start the main one.
+			self.wait_for_tf_timer.cancel()
+			period = 1.0 / max(1e-3, float(self.publish_rate))
+			self.timer = self.create_timer(period, self.timer_cb)
+
+		except TransformException as ex:
+			self.get_logger().warn(f'Could not transform slamware_map to base_link: {ex}. Waiting...')
 
 	# --- subscribers callbacks ---
 	def _cb_target_vel(self, msg: Float64) -> None:

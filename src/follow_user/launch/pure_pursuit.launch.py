@@ -13,9 +13,15 @@ def generate_launch_description():
     return LaunchDescription([
         Node(
             package='follow_user',
+            executable='path_search_server.py',
+            name='path_search_server',
+            output='screen'
+        ),
+        Node(
+            package='follow_user',
             executable='pure_pursuit_controller',
             name='pure_pursuit_controller',
             output='screen',
             parameters=[params_file]
-        )
+        ),
     ])
