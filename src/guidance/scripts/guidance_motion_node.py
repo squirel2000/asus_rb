@@ -93,13 +93,22 @@ class GuidanceActionServer(BaseNavigationNode):
         msg.angular.z = max_angular_speed
         self.publisher_set_max_speed.publish(msg)
 
-    async def set_max_speed(self, max_moving_speed: float, max_angular_speed: float):
+    async def set_max_speed(self, max_moving_speed: float, max_angular_speed: float, timeout=1.0):
         """Call service to set max moving and angular speed with retry on failure."""
         request = SetMaxSpeed.Request()
         request.max_moving_speed = max_moving_speed
         request.max_angular_speed = max_angular_speed
-        future = await self.set_max_speed_client.call_async(request)
-        if future.success:
+
+        future = self.set_max_speed_client.call_async(request)
+        _last_time = self.get_clock().now()
+        while rclpy.ok():
+            if future.done() or (self.get_clock().now() - _last_time).nanoseconds / 1e9 > timeout:
+                success = future.result().success if future.result() else False
+                break
+            self.get_logger().warn("waiting service response.")
+            await self.ros_async_sleep(0.1)
+
+        if success:
             self.get_logger().info(
                 f'Set max speed: max_moving_speed={max_moving_speed:.2f}, max_angular_speed={max_angular_speed:.2f}')
             return True
@@ -184,22 +193,22 @@ class GuidanceActionServer(BaseNavigationNode):
             self._last_speed_change_time = current_time
         return status
 
-    async def _resume_navigation(self, target_pose: PoseStamped, speed_ratio: float):
+    def _resume_navigation(self, target_pose: PoseStamped, speed_ratio: float):
         """Resume navigation when human is re-detected."""
         self.get_logger().info("Human re-detected, resuming navigation")
-        await self.publish_cancel()
+        self.publish_cancel()
         self.publish_move_to(target_pose, speed_ratio)
 
-    async def publish_cancel(self):
-        """Override base publish_cancel to reset speed."""
-        await super().publish_cancel()
+    async def publish_cancel_and_resume_max_speed(self):
+        """Publish cancel and reset speed to default max speed."""
+        self.publish_cancel()
         # Reset to default speed before aborting
         await self.set_max_speed(self.max_moving_speed, self.max_angular_speed)
         self.publish_set_max_speed(self.max_moving_speed, self.max_angular_speed)
 
     async def _abort_goal(self, goal_handle, message: str):
         """Helper method to abort the goal with a specific message."""
-        await self.publish_cancel()
+        await self.publish_cancel_and_resume_max_speed()
         goal_handle.abort()
         result = Guidance.Result()
         result.success = False
@@ -229,7 +238,7 @@ class GuidanceActionServer(BaseNavigationNode):
             # Publish feedback
             if self.current_pose:
                 feedback_msg.current_pose = self.current_pose
-            feedback_msg.status = current_state
+            feedback_msg.status = "CHECKING_EXECUTION_STATUS"
             goal_handle.publish_feedback(feedback_msg)
             
             if current_state == "DEVICE_ERROR_DETECTED":
@@ -297,7 +306,7 @@ class GuidanceActionServer(BaseNavigationNode):
 
             """Check for cancel request"""
             if goal_handle.is_cancel_requested:
-                await self.publish_cancel()
+                await self.publish_cancel_and_resume_max_speed()
                 goal_handle.canceled()
                 result.success = False
                 result.message = "Goal canceled by the client."
@@ -316,7 +325,7 @@ class GuidanceActionServer(BaseNavigationNode):
             if self._is_human_lost and self._human_lost_start_time and \
                (self.get_clock().now() - self._human_lost_start_time).nanoseconds / 1e9 > self.lost_timeout_sec:
                 if human_distance <= self.lost_distance_threshold:
-                    await self._resume_navigation(target_pose, speed_ratio)
+                    self._resume_navigation(target_pose, speed_ratio)
                     self._is_human_lost = False
                     self._human_lost_start_time = None
 
@@ -329,8 +338,7 @@ class GuidanceActionServer(BaseNavigationNode):
             """Check whether the goal is completed"""
             if self.current_pose and not self.remaining_targets:
                 if self._is_goal_reached(self.current_pose, target_pose):
-                    await self.set_max_speed(self.max_moving_speed, self.max_angular_speed)
-                    self.publish_set_max_speed(self.max_moving_speed, self.max_angular_speed)
+                    await self.publish_cancel_and_resume_max_speed()
                     goal_handle.succeed()
                     result.success = True
                     result.message = "Goal achieved successfully."

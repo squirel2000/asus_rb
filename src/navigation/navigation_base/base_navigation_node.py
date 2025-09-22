@@ -6,7 +6,7 @@ from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.task import Future
 from geometry_msgs.msg import PoseStamped
-from slamware_ros_sdk.msg import MoveToRequest, CancelActionRequest
+from slamware_ros_sdk.msg import MoveToRequest, CancelActionRequest, GoHomeRequest, RobotBasicState
 from tf_transformations import euler_from_quaternion
 from std_msgs.msg import Float32MultiArray, String
 from nav_msgs.msg import Path
@@ -39,12 +39,20 @@ class BaseNavigationNode(Node):
         self.amr_events = []
         self.events_subscriber = self.create_subscription(
             String, '/amr_events', self.amr_events_callback, 10, callback_group=self.callback_group)
+
+        # Subscription to AMR basic state
+        self.amr_basic_state = None
+        self.basic_state_subscriber = self.create_subscription(
+            RobotBasicState, '/slamware_ros_sdk_server_node/robot_basic_state', self.amr_basic_state_callback, 10, callback_group=self.callback_group)
         
         # Publishers to communicate with the slamware_ros_sdk
         self.publisher_move_to = self.create_publisher(
             MoveToRequest, '/slamware_ros_sdk_server_node/move_to', 10, callback_group=self.callback_group)
         self.publisher_cancel = self.create_publisher(
             CancelActionRequest, '/slamware_ros_sdk_server_node/cancel_action', 10, callback_group=self.callback_group)
+        
+        self.publisher_go_home = self.create_publisher(
+            GoHomeRequest, '/slamware_ros_sdk_server_node/go_home', 10, callback_group=self.callback_group)
         
         # Declare common ROS parameters with default values
         self.declare_parameter('success_distance_threshold', 0.1)  # Position distance threshold (meters)
@@ -92,35 +100,45 @@ class BaseNavigationNode(Node):
         self.amr_events = ast.literal_eval(msg.data)
         self.get_logger().debug(f"AMR's events : {self.amr_events}")
 
+    def amr_basic_state_callback(self, msg):
+        """Callback to store the AMR's basic state."""
+        self.amr_basic_state = msg
+        self.get_logger().debug(f"AMR's basic state : {self.amr_basic_state}")
+
     def publish_move_to(self, pose: PoseStamped, speed_ratio: float):
         """Publish a MoveToRequest message with the given pose."""
-        msg = MoveToRequest()
-        msg.location.x = pose.pose.position.x
-        msg.location.y = pose.pose.position.y
-        msg.location.z = pose.pose.position.z
-        quaternion = (
-            pose.pose.orientation.x,
-            pose.pose.orientation.y,
-            pose.pose.orientation.z,
-            pose.pose.orientation.w
-        )
-        _, _, yaw = euler_from_quaternion(quaternion)
-        msg.yaw = yaw
-        msg.options.opt_flags.flags = 48  # 16+32, MoveOptionFlag: [16:'PRECISE', 32:'WITH_YAW']
-        msg.options.speed_ratio.is_valid = True
-        msg.options.speed_ratio.value = speed_ratio
-        self.publisher_move_to.publish(msg)
-        self.get_logger().info(
-            f'Published MoveToRequest: location=(%.2f, %.2f, %.2f), yaw=%.2f, speed_ratio=%.2f' % 
-            (msg.location.x, msg.location.y, msg.location.z, msg.yaw, msg.options.speed_ratio.value)
-        )
 
-    async def publish_cancel(self):
+        if pose.pose.position.z == 99.99:
+            msg = GoHomeRequest()
+            self.publisher_go_home.publish(msg)
+            self.get_logger().info('Published GoHomeRequest.')
+        else:
+            msg = MoveToRequest()
+            msg.location.x = pose.pose.position.x
+            msg.location.y = pose.pose.position.y
+            msg.location.z = pose.pose.position.z
+            quaternion = (
+                pose.pose.orientation.x,
+                pose.pose.orientation.y,
+                pose.pose.orientation.z,
+                pose.pose.orientation.w
+            )
+            _, _, yaw = euler_from_quaternion(quaternion)
+            msg.yaw = yaw
+            msg.options.opt_flags.flags = 48  # 16+32, MoveOptionFlag: [16:'PRECISE', 32:'WITH_YAW']
+            msg.options.speed_ratio.is_valid = True
+            msg.options.speed_ratio.value = speed_ratio
+            self.publisher_move_to.publish(msg)
+            self.get_logger().info(
+                f'Published MoveToRequest: location=(%.2f, %.2f, %.2f), yaw=%.2f, speed_ratio=%.2f' % 
+                (msg.location.x, msg.location.y, msg.location.z, msg.yaw, msg.options.speed_ratio.value)
+            )
+
+    def publish_cancel(self):
         """Publish a CancelActionRequest message."""
         msg = CancelActionRequest()
         self.publisher_cancel.publish(msg)
         self.get_logger().info(f'Published CancelActionRequest.')
-        # await self.ros_async_sleep(0)  # empty await to ignore python warning
 
     def _is_goal_reached(self, current_pose: PoseStamped, target_pose: PoseStamped, with_yaw=True) -> bool:
         """Check if the robot has reached the target pose (position and yaw)."""

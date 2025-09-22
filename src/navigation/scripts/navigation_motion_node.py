@@ -36,7 +36,7 @@ class NavigateActionServer(BaseNavigationNode):
 
     async def _abort_goal(self, goal_handle, message: str):
         """Helper method to abort the goal with a specific message."""
-        await self.publish_cancel()
+        self.publish_cancel()
         goal_handle.abort()
         result = Navigate.Result()
         result.success = False
@@ -50,6 +50,8 @@ class NavigateActionServer(BaseNavigationNode):
         speed_ratio = goal_handle.request.speed_ratio
         feedback_msg = Navigate.Feedback()
         result = Navigate.Result()
+
+        self.is_gohome = True if target_pose.pose.position.z == 99.99 else False
 
         # Create a navigation action via publisher
         self.publish_move_to(target_pose, speed_ratio)
@@ -65,7 +67,7 @@ class NavigateActionServer(BaseNavigationNode):
             # Publish feedback
             if self.current_pose:
                 feedback_msg.current_pose = self.current_pose
-            feedback_msg.status = current_state
+            feedback_msg.status = "CHECKING_EXECUTION_STATUS"
             goal_handle.publish_feedback(feedback_msg)
             
             if current_state == "DEVICE_ERROR_DETECTED":
@@ -82,6 +84,10 @@ class NavigateActionServer(BaseNavigationNode):
                 # trying to publish again
                 self.publish_move_to(target_pose, speed_ratio)
             else:
+                if self.is_gohome:
+                    target_pose.pose.position.x = self.remaining_targets[0][0]
+                    target_pose.pose.position.y = self.remaining_targets[0][1]
+
                 if not self.global_path and not self._is_goal_reached(self.current_pose, target_pose, with_yaw=False):
                     self.get_logger().warn('Try to find a path to the target pose.')
                     timeout_message = f"Failed to find a valid path to the target within {_waiting_timeout} seconds."
@@ -103,12 +109,6 @@ class NavigateActionServer(BaseNavigationNode):
 
         while rclpy.ok():
             current_state = self._get_status(self.amr_events)
-
-            """Publish feedback if current pose is available"""
-            if self.current_pose:
-                feedback_msg.current_pose = self.current_pose
-                feedback_msg.status = current_state
-                goal_handle.publish_feedback(feedback_msg)
 
             """Safety prevention"""
             if current_state == "DEVICE_ERROR_DETECTED":
@@ -136,7 +136,7 @@ class NavigateActionServer(BaseNavigationNode):
 
             """Check for cancel request"""
             if goal_handle.is_cancel_requested:
-                await self.publish_cancel()
+                self.publish_cancel()
                 goal_handle.canceled()
                 result.success = False
                 result.message = "Goal canceled by the client."
@@ -145,8 +145,20 @@ class NavigateActionServer(BaseNavigationNode):
 
             """Check whether the goal is completed"""
             if not self.remaining_targets: # No more target points
+
+                # Check if the robot has reached the docking pose
+                if self.is_gohome and self.amr_basic_state:
+                    if self.amr_basic_state.is_charging:
+                        goal_handle.succeed()
+                        result.success = True
+                        result.message = "Goal achieved successfully."
+                        self.get_logger().info(result.message)
+                        return result
+                    else:
+                        current_state = "TRYING_TO_DOCK_WITH_CHARGER"
+                        
                 # Check if the robot has reached the target pose
-                if self._is_goal_reached(self.current_pose, target_pose):
+                elif self._is_goal_reached(self.current_pose, target_pose):
                     goal_handle.succeed()
                     result.success = True
                     result.message = "Goal achieved successfully."
@@ -155,7 +167,13 @@ class NavigateActionServer(BaseNavigationNode):
                 else: # AMR action is done but did not meet threshold criteria
                     result = await self._abort_goal(goal_handle, "Goal aborted because the MoveTo action completed but the target pose was not reached.")
                     return result
-            
+
+            """Publish feedback if current pose is available"""
+            if self.current_pose:
+                feedback_msg.current_pose = self.current_pose
+                feedback_msg.status = current_state
+                goal_handle.publish_feedback(feedback_msg)
+
             # Reset pose to none until new msg is posted
             self.current_pose = None
             

@@ -14,6 +14,7 @@ def create_pose_stamped(node: Node, x, y, yaw):
     pose.header.frame_id = "map"
     pose.pose.position.x = x
     pose.pose.position.y = y
+    pose.pose.position.z = 0.0 # 99.99 = gohome
     
     # Convert yaw to quaternion
     cy = math.cos(yaw * 0.5)
