@@ -37,7 +37,7 @@ class GuidanceActionServer(BaseNavigationNode):
         self.human_pose_subscriber = self.create_subscription(
             PoseStamped, '/human_relative_pose_rear', self.human_pose_callback, 10, callback_group=self.callback_group)
         
-        # Additional publisher for set_max_speed
+        # Additional publisher for set_max_speed (currently for debug)
         self.publisher_set_max_speed = self.create_publisher(
             Twist, '/set_max_speed', 10, callback_group=self.callback_group)
 
@@ -127,8 +127,8 @@ class GuidanceActionServer(BaseNavigationNode):
         self.get_logger().debug(f"Human relative distance: {distance:.2f} m")
         return distance
 
-    async def _adjust_speed_and_handle_lost(self, human_distance: float):
-        """Adjust robot speed based on human distance and handle lost scenarios."""
+    async def _manage_speed_and_guiding_status(self, human_distance: float):
+        """Manage robot speed based on human distance and handle following scenarios."""
         current_time = self.get_clock().now()
 
         # Speed adjustment logic
@@ -178,6 +178,7 @@ class GuidanceActionServer(BaseNavigationNode):
             self._human_lost_start_time = None
             self.get_logger().info(f"USER_FOLLOWING ---> Distance:{human_distance:.2f}, Adjust speed to - linear:{self.current_max_moving_speed:.2f}, angular:{self.current_max_angular_speed:.2f}")
         
+        # currently for debug
         self.publish_set_max_speed(self.current_max_moving_speed, self.current_max_angular_speed)
         
         # Update speed if changed
@@ -229,7 +230,6 @@ class GuidanceActionServer(BaseNavigationNode):
         
         _waiting_timeout = self.stuck_timeout_sec / 2
         _last_move_time = self.get_clock().now()
-        _last_pose = self.current_pose
         
         # Confirm that the AMR has successfully started executing action
         while rclpy.ok():
@@ -315,9 +315,9 @@ class GuidanceActionServer(BaseNavigationNode):
 
             """Calculate human distance and publish feedback"""
             human_distance = self._get_human_distance(self.human_relative_pose)
-            guiding_stage = await self._adjust_speed_and_handle_lost(human_distance)
+            guiding_status = await self._manage_speed_and_guiding_status(human_distance)
 
-            if guiding_stage == "ABORTING":
+            if guiding_status == "ABORTING":
                 result = await self._abort_goal(goal_handle, "Goal aborted due to failure to detect the human follower after timeout.")
                 return result
 
@@ -332,11 +332,11 @@ class GuidanceActionServer(BaseNavigationNode):
             """Publish feedback if current pose is available"""
             if self.current_pose:
                 feedback_msg.current_pose = self.current_pose
-                feedback_msg.status = f"{current_state}, {guiding_stage}"
+                feedback_msg.status = f"{current_state}, {guiding_status}"
                 goal_handle.publish_feedback(feedback_msg)
 
             """Check whether the goal is completed"""
-            if self.current_pose and not self.remaining_targets:
+            if not self.remaining_targets:
                 if self._is_goal_reached(self.current_pose, target_pose):
                     await self.publish_cancel_and_resume_max_speed()
                     goal_handle.succeed()

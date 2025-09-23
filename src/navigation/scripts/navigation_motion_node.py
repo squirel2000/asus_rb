@@ -58,7 +58,6 @@ class NavigateActionServer(BaseNavigationNode):
 
         _waiting_timeout = self.stuck_timeout_sec / 2
         _last_move_time = self.get_clock().now()
-        _last_pose = self.current_pose
 
         # Confirm that the AMR has successfully started executing action
         while rclpy.ok():
@@ -156,7 +155,6 @@ class NavigateActionServer(BaseNavigationNode):
                         return result
                     else:
                         current_state = "TRYING_TO_DOCK_WITH_CHARGER"
-                        
                 # Check if the robot has reached the target pose
                 elif self._is_goal_reached(self.current_pose, target_pose):
                     goal_handle.succeed()
@@ -164,7 +162,8 @@ class NavigateActionServer(BaseNavigationNode):
                     result.message = "Goal achieved successfully."
                     self.get_logger().info(result.message)
                     return result
-                else: # AMR action is done but did not meet threshold criteria
+                # AMR action is done but did not meet threshold criteria
+                else:
                     result = await self._abort_goal(goal_handle, "Goal aborted because the MoveTo action completed but the target pose was not reached.")
                     return result
 
