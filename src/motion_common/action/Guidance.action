@@ -1,6 +1,7 @@
 # Goal
 geometry_msgs/PoseStamped target_pose
 float32 speed_ratio
+bool align_yaw
 string user_id
 ---
 # Result

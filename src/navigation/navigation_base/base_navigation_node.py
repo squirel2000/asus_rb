@@ -105,7 +105,7 @@ class BaseNavigationNode(Node):
         self.amr_basic_state = msg
         self.get_logger().debug(f"AMR's basic state : {self.amr_basic_state}")
 
-    def publish_move_to(self, pose: PoseStamped, speed_ratio: float):
+    def publish_move_to(self, pose: PoseStamped, speed_ratio: float, with_yaw=True):
         """Publish a MoveToRequest message with the given pose."""
 
         if pose.pose.position.z == 99.99:
@@ -125,7 +125,10 @@ class BaseNavigationNode(Node):
             )
             _, _, yaw = euler_from_quaternion(quaternion)
             msg.yaw = yaw
-            msg.options.opt_flags.flags = 48  # 16+32, MoveOptionFlag: [16:'PRECISE', 32:'WITH_YAW']
+            if with_yaw:
+                msg.options.opt_flags.flags = 48  # 16+32, MoveOptionFlag: [16:'PRECISE', 32:'WITH_YAW']
+            else:
+                msg.options.opt_flags.flags = 16
             msg.options.speed_ratio.is_valid = True
             msg.options.speed_ratio.value = speed_ratio
             self.publisher_move_to.publish(msg)
