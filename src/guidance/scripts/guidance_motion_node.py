@@ -156,8 +156,8 @@ class GuidanceActionServer(BaseNavigationNode):
                     return status
                 else:
                     # smooth deceleration
-                    self.current_max_moving_speed *= 0.8
-                    self.current_max_angular_speed = max(0.5, self.current_max_angular_speed*0.9)
+                    self.current_max_moving_speed *= 0.7
+                    self.current_max_angular_speed = max(0.5, self.current_max_angular_speed*0.7)
 
                 self.get_logger().warn(f"USER_NOT_FOUND ---> Distance:{human_distance:.2f}, Adjust speed to - linear:{self.current_max_moving_speed:.2f}, angular:{self.current_max_angular_speed:.2f}")
             else:

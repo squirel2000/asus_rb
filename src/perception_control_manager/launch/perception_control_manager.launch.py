@@ -18,7 +18,7 @@ def generate_launch_description():
         # Declare launch arguments
         DeclareLaunchArgument(
             'ip_address',
-            default_value='192.168.12.1',
+            default_value='192.168.11.1',
             description='IP address for the SLAMWARE SDK server'
         ),
         DeclareLaunchArgument(
