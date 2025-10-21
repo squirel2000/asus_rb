@@ -136,7 +136,7 @@ class GuidanceActionServer(BaseNavigationNode):
         if human_distance < self.normal_distance_min:
             # Human too close, accelerate
             self.current_max_moving_speed = self.max_moving_speed * 1.2
-            #self.current_max_angular_speed = self.max_angular_speed * 1.2
+            self.current_max_angular_speed = self.max_angular_speed
             status = "USER_TOO_CLOSE"
             self._is_human_lost = False
             self._human_lost_start_time = None
@@ -348,7 +348,7 @@ class GuidanceActionServer(BaseNavigationNode):
 
             """Check whether the goal is completed"""
             if not self.remaining_targets:
-                if self._is_goal_reached(self.current_pose, target_pose):
+                if self._is_goal_reached(self.current_pose, target_pose, align_yaw):
                     await self.publish_cancel_and_resume_max_speed()
                     goal_handle.succeed()
                     result.success = True

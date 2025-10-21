@@ -168,7 +168,7 @@ class NavigateActionServer(BaseNavigationNode):
                     else:
                         current_state = "TRYING_TO_DOCK_WITH_CHARGER"
                 # Check if the robot has reached the target pose
-                elif self._is_goal_reached(self.current_pose, target_pose):
+                elif self._is_goal_reached(self.current_pose, target_pose, align_yaw):
                     goal_handle.succeed()
                     result.success = True
                     result.message = "Goal achieved successfully."

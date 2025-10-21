@@ -17,7 +17,8 @@ def launch_setup(context, *args, **kwargs):
     bag_path = os.path.join(output_dir, bag_name) if output_dir else bag_name
 
     # Topic lists
-    navigation_topics = ["/slamware_ros_sdk_server_node/scan", 
+    navigation_topics = ["/tf", 
+                         "/slamware_ros_sdk_server_node/scan",
                          "/slamware_ros_sdk_server_node/odom", 
                          "/slamware_ros_sdk_server_node/global_plan_path", 
                          "/robot_pose", 
