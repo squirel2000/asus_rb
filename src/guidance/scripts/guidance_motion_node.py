@@ -4,7 +4,6 @@ import rclpy
 from rclpy.action import ActionServer
 from rclpy.executors import MultiThreadedExecutor
 from geometry_msgs.msg import PoseStamped, Twist
-from perception_control_manager.srv import SetMaxSpeed
 from navigation_base.base_navigation_node import BaseNavigationNode
 from motion_common.action import Guidance
 
@@ -21,16 +20,12 @@ class GuidanceActionServer(BaseNavigationNode):
         self.declare_parameter('normal_distance_max', 2.0)
         self.declare_parameter('lost_distance_threshold', 3.0)
         self.declare_parameter('lost_timeout_sec', 10.0)
-        self.declare_parameter('max_moving_speed', 1.5)
-        self.declare_parameter('max_angular_speed', 1.2)
 
         # Get additional parameter values
         self.normal_distance_min = self.get_parameter('normal_distance_min').get_parameter_value().double_value
         self.normal_distance_max = self.get_parameter('normal_distance_max').get_parameter_value().double_value
         self.lost_distance_threshold = self.get_parameter('lost_distance_threshold').get_parameter_value().double_value
         self.lost_timeout_sec = self.get_parameter('lost_timeout_sec').get_parameter_value().double_value
-        self.max_moving_speed = self.get_parameter('max_moving_speed').get_parameter_value().double_value
-        self.max_angular_speed = self.get_parameter('max_angular_speed').get_parameter_value().double_value
 
         # Additional subscriber for human relative pose
         self.human_relative_pose = None
@@ -41,11 +36,6 @@ class GuidanceActionServer(BaseNavigationNode):
         self.publisher_set_max_speed = self.create_publisher(
             Twist, '/set_max_speed', 10, callback_group=self.callback_group)
 
-        # Service client for set_max_speed
-        self.set_max_speed_client = self.create_client(
-            SetMaxSpeed, 'set_max_speed', callback_group=self.callback_group)
-        """while not self.set_max_speed_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('Waiting for set_max_speed service...')"""
 
         # Action server for Guidance
         self._action_server = ActionServer(
@@ -92,29 +82,6 @@ class GuidanceActionServer(BaseNavigationNode):
         msg.linear.x = max_moving_speed
         msg.angular.z = max_angular_speed
         self.publisher_set_max_speed.publish(msg)
-
-    async def set_max_speed(self, max_moving_speed: float, max_angular_speed: float, timeout=1.0):
-        """Call service to set max moving and angular speed with retry on failure."""
-        request = SetMaxSpeed.Request()
-        request.max_moving_speed = max_moving_speed
-        request.max_angular_speed = max_angular_speed
-
-        future = self.set_max_speed_client.call_async(request)
-        _last_time = self.get_clock().now()
-        while rclpy.ok():
-            if future.done() or (self.get_clock().now() - _last_time).nanoseconds / 1e9 > timeout:
-                success = future.result().success if future.result() else False
-                break
-            self.get_logger().warn("waiting service response.")
-            await self.ros_async_sleep(0.1)
-
-        if success:
-            self.get_logger().info(
-                f'Set max speed: max_moving_speed={max_moving_speed:.2f}, max_angular_speed={max_angular_speed:.2f}')
-            return True
-        else:
-            self.get_logger().error('Failed to set max speed.')
-            return False
 
     def _get_human_distance(self, human_relative_pose) -> float:
         """Calculate the distance to the human from human_relative_pose."""

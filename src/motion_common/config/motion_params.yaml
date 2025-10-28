@@ -4,7 +4,9 @@ navigation_motion_node:
     success_yaw_threshold: 0.1
     stuck_timeout_sec: 20.0
     stuck_distance_threshold: 0.05
-
+    max_moving_speed: 1.2
+    max_angular_speed: 1.2
+    
 guidance_motion_node:
   ros__parameters:
     success_distance_threshold: 0.1

@@ -33,7 +33,9 @@ class NavigateActionServer(BaseNavigationNode):
             f"Parameters: success_distance_threshold={self.success_distance_threshold:.2f}, "
             f"success_yaw_threshold={self.success_yaw_threshold:.2f}, "
             f"stuck_timeout_sec={self.stuck_timeout_sec:.2f}, "
-            f"stuck_distance_threshold={self.stuck_distance_threshold:.2f}"
+            f"stuck_distance_threshold={self.stuck_distance_threshold:.2f}, "
+            f"max_moving_speed={self.max_moving_speed:.2f}, "
+            f"max_angular_speed={self.max_angular_speed:.2f}"
         )
 
     async def _abort_goal(self, goal_handle, message: str):
@@ -56,6 +58,9 @@ class NavigateActionServer(BaseNavigationNode):
 
         self.is_gohome = True if math.isclose(target_pose.pose.position.z, GO_HOME_CONSTANT) else False
 
+        # Set the max speed to the navigation preset speed.
+        await self.set_max_speed(self.max_moving_speed, self.max_angular_speed)
+        
         # Create a navigation action via publisher
         self.publish_move_to(target_pose, speed_ratio, align_yaw)
 
