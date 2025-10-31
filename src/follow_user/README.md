@@ -34,3 +34,41 @@ To run the simulation, use the `--simulate-person` flag with the client script:
 ```
 
 This will launch an additional terminal for the `person_simulator.py` script.
+
+## Code Flow
+
+Here is a high-level overview of the code and data flow for the follow_user functionality:
+
+1.  **Initiation (`follow_user_client.py`)**
+    - This is the main entry point script.
+    - It can be run with a `-s` or `--simulate-person` flag to launch the `person_simulator.py` for automated testing.
+    - If the simulation flag is not used, the system expects manual goal setting via RViz.
+
+2.  **Goal Publishing (`person_simulator.py` or RViz)**
+    - **`person_simulator.py`**:
+        - Reads a predefined path from `src/follow_user/test/path.json`.
+        - Publishes a series of `geometry_msgs/PointStamped` messages to the `/clicked_point` topic, simulating a moving person.
+    - **RViz (Manual)**:
+        - A user can click on the "Publish Point" button in RViz to publish a single `geometry_msgs/PointStamped` message to the `/clicked_point` topic.
+
+3.  **Path Planning (`path_search_server.py`)**
+    - **Subscribes to**: `/clicked_point` (`geometry_msgs/PointStamped`).
+    - Upon receiving a point, it calculates a path from the robot's current location to the received point.
+    - **Publishes**: A `nav_msgs/Path` message to the `/follow_user/planned_path` topic.
+
+4.  **Path Following (`pure_pursuit_controller.cpp`)**
+    - **Subscribes to**:
+        - `/follow_user/planned_path` (`nav_msgs/Path`): To get the path to follow.
+        - `/odom` (`nav_msgs/Odometry`): For the robot's current pose and velocity.
+        - `/tf`: For coordinate frame transformations (e.g., `map` to `base_link`).
+    - It calculates the required linear and angular velocities to follow the path using the pure pursuit algorithm.
+    - **Publishes**: `geometry_msgs/Twist` messages to the `/cmd_vel` topic.
+
+5.  **Robot Control (`slamware_ros_sdk_server_node`)**
+    - This is the low-level driver for the robot hardware.
+    - **Subscribes to**: `/cmd_vel` (`geometry_msgs/Twist`) to receive velocity commands.
+    - It translates the velocity commands into motor commands for the robot.
+    - **Publishes**:
+        - `/odom` (`nav_msgs/Odometry`): The robot's estimated position and velocity.
+        - `/map` (`nav_msgs/OccupancyGrid`): The map of the environment.
+        - `/tf`: Transformations between different coordinate frames (e.g., `odom` to `base_link`).
