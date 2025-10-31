@@ -6,7 +6,8 @@ from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.task import Future
 from geometry_msgs.msg import PoseStamped
-from slamware_ros_sdk.msg import MoveToRequest, CancelActionRequest
+from perception_control_manager.srv import SetMaxSpeed
+from slamware_ros_sdk.msg import MoveToRequest, CancelActionRequest, GoHomeRequest, RobotBasicState
 from tf_transformations import euler_from_quaternion
 from std_msgs.msg import Float32MultiArray, String
 from nav_msgs.msg import Path
@@ -39,6 +40,11 @@ class BaseNavigationNode(Node):
         self.amr_events = []
         self.events_subscriber = self.create_subscription(
             String, '/amr_events', self.amr_events_callback, 10, callback_group=self.callback_group)
+
+        # Subscription to AMR basic state
+        self.amr_basic_state = None
+        self.basic_state_subscriber = self.create_subscription(
+            RobotBasicState, '/slamware_ros_sdk_server_node/robot_basic_state', self.amr_basic_state_callback, 10, callback_group=self.callback_group)
         
         # Publishers to communicate with the slamware_ros_sdk
         self.publisher_move_to = self.create_publisher(
@@ -46,17 +52,30 @@ class BaseNavigationNode(Node):
         self.publisher_cancel = self.create_publisher(
             CancelActionRequest, '/slamware_ros_sdk_server_node/cancel_action', 10, callback_group=self.callback_group)
         
+        self.publisher_go_home = self.create_publisher(
+            GoHomeRequest, '/slamware_ros_sdk_server_node/go_home', 10, callback_group=self.callback_group)
+
+        # Service client for set_max_speed
+        self.set_max_speed_client = self.create_client(
+            SetMaxSpeed, 'set_max_speed', callback_group=self.callback_group)
+        """while not self.set_max_speed_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for set_max_speed service...')"""
+        
         # Declare common ROS parameters with default values
         self.declare_parameter('success_distance_threshold', 0.1)  # Position distance threshold (meters)
         self.declare_parameter('success_yaw_threshold', 0.1)       # Yaw angle threshold (radians)
         self.declare_parameter('stuck_timeout_sec', 20.0)          # Stuck timeout duration (seconds)
         self.declare_parameter('stuck_distance_threshold', 0.05)   # Stuck detection distance threshold (meters)
+        self.declare_parameter('max_moving_speed', 1.5)
+        self.declare_parameter('max_angular_speed', 1.2)
 
         # Get common parameter values
         self.success_distance_threshold = self.get_parameter('success_distance_threshold').get_parameter_value().double_value
         self.success_yaw_threshold = self.get_parameter('success_yaw_threshold').get_parameter_value().double_value
         self.stuck_timeout_sec = self.get_parameter('stuck_timeout_sec').get_parameter_value().double_value
         self.stuck_distance_threshold = self.get_parameter('stuck_distance_threshold').get_parameter_value().double_value
+        self.max_moving_speed = self.get_parameter('max_moving_speed').get_parameter_value().double_value
+        self.max_angular_speed = self.get_parameter('max_angular_speed').get_parameter_value().double_value
 
         self.get_logger().info(f"{node_name} base initialization completed.")
     
@@ -92,36 +111,72 @@ class BaseNavigationNode(Node):
         self.amr_events = ast.literal_eval(msg.data)
         self.get_logger().debug(f"AMR's events : {self.amr_events}")
 
-    def publish_move_to(self, pose: PoseStamped, speed_ratio: float):
-        """Publish a MoveToRequest message with the given pose."""
-        msg = MoveToRequest()
-        msg.location.x = pose.pose.position.x
-        msg.location.y = pose.pose.position.y
-        msg.location.z = pose.pose.position.z
-        quaternion = (
-            pose.pose.orientation.x,
-            pose.pose.orientation.y,
-            pose.pose.orientation.z,
-            pose.pose.orientation.w
-        )
-        _, _, yaw = euler_from_quaternion(quaternion)
-        msg.yaw = yaw
-        msg.options.opt_flags.flags = 48  # 16+32, MoveOptionFlag: [16:'PRECISE', 32:'WITH_YAW']
-        msg.options.speed_ratio.is_valid = True
-        msg.options.speed_ratio.value = speed_ratio
-        self.publisher_move_to.publish(msg)
-        self.get_logger().info(
-            f'Published MoveToRequest: location=(%.2f, %.2f, %.2f), yaw=%.2f, speed_ratio=%.2f' % 
-            (msg.location.x, msg.location.y, msg.location.z, msg.yaw, msg.options.speed_ratio.value)
-        )
+    def amr_basic_state_callback(self, msg):
+        """Callback to store the AMR's basic state."""
+        self.amr_basic_state = msg
+        self.get_logger().debug(f"AMR's basic state : {self.amr_basic_state}")
 
-    async def publish_cancel(self):
+    def publish_move_to(self, pose: PoseStamped, speed_ratio: float, with_yaw=True):
+        """Publish a MoveToRequest message with the given pose."""
+
+        if pose.pose.position.z == 99.99:
+            msg = GoHomeRequest()
+            self.publisher_go_home.publish(msg)
+            self.get_logger().info('Published GoHomeRequest.')
+        else:
+            msg = MoveToRequest()
+            msg.location.x = pose.pose.position.x
+            msg.location.y = pose.pose.position.y
+            msg.location.z = pose.pose.position.z
+            quaternion = (
+                pose.pose.orientation.x,
+                pose.pose.orientation.y,
+                pose.pose.orientation.z,
+                pose.pose.orientation.w
+            )
+            _, _, yaw = euler_from_quaternion(quaternion)
+            msg.yaw = yaw
+            if with_yaw:
+                msg.options.opt_flags.flags = 48  # 16+32, MoveOptionFlag: [16:'PRECISE', 32:'WITH_YAW']
+            else:
+                msg.options.opt_flags.flags = 16
+            msg.options.speed_ratio.is_valid = True
+            msg.options.speed_ratio.value = speed_ratio
+            self.publisher_move_to.publish(msg)
+            self.get_logger().info(
+                f'Published MoveToRequest: location=(%.2f, %.2f, %.2f), yaw=%.2f, speed_ratio=%.2f' % 
+                (msg.location.x, msg.location.y, msg.location.z, msg.yaw, msg.options.speed_ratio.value)
+            )
+
+    def publish_cancel(self):
         """Publish a CancelActionRequest message."""
         msg = CancelActionRequest()
         self.publisher_cancel.publish(msg)
         self.get_logger().info(f'Published CancelActionRequest.')
-        # await self.ros_async_sleep(0)  # empty await to ignore python warning
 
+    async def set_max_speed(self, max_moving_speed: float, max_angular_speed: float, timeout=1.0):
+        """Call service to set max moving and angular speed with retry on failure."""
+        request = SetMaxSpeed.Request()
+        request.max_moving_speed = max_moving_speed
+        request.max_angular_speed = max_angular_speed
+
+        future = self.set_max_speed_client.call_async(request)
+        _last_time = self.get_clock().now()
+        while rclpy.ok():
+            if future.done() or (self.get_clock().now() - _last_time).nanoseconds / 1e9 > 10.0:
+                success = future.result().success if future.result() else False
+                break
+            self.get_logger().warn("waiting set_max_speed service result.")
+            await self.ros_async_sleep(0.1)
+
+        if success:
+            self.get_logger().info(
+                f'Set max speed: max_moving_speed={max_moving_speed:.2f}, max_angular_speed={max_angular_speed:.2f}')
+            return True
+        else:
+            self.get_logger().error('Failed to set max speed.')
+            return False
+        
     def _is_goal_reached(self, current_pose: PoseStamped, target_pose: PoseStamped, with_yaw=True) -> bool:
         """Check if the robot has reached the target pose (position and yaw)."""
         if current_pose is None:

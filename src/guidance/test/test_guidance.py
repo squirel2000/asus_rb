@@ -72,7 +72,7 @@ class GuidanceActionClient(Node):
     def get_result_callback(self, future):
         """Callback for when the action is finished."""
         result = future.result().result
-        self.get_logger().info(f'Result: {{success: {result.success}}}')
+        self.get_logger().info(f'Result: {{success: {result.success}, message: {result.message}}}')
         rclpy.shutdown()
 
     def feedback_callback(self, feedback_msg):

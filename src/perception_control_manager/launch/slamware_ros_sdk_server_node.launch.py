@@ -8,9 +8,8 @@ import os
 
 def generate_launch_description():
     # Define launch arguments
-    ip_address = LaunchConfiguration('ip_address', default='192.168.12.1')
-    port = LaunchConfiguration('port', default='1445')
-    enable_rviz = LaunchConfiguration('enable_rviz', default='true')
+    ip_address = LaunchConfiguration('ip_address')
+    enable_rviz = LaunchConfiguration('enable_rviz')
 
     # Get the share directory of slamware_ros_sdk
     slamware_ros_sdk_dir = get_package_share_directory('slamware_ros_sdk')
@@ -36,7 +35,7 @@ def generate_launch_description():
             output='both',
             parameters=[
                 {'ip_address': ip_address},
-                {'robot_port': port},
+                {'robot_port': 1445},
                 {'angle_compensate': True},
                 {'fixed_odom_map_tf': True},
                 {'raw_ladar_data': False},

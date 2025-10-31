@@ -1,6 +1,7 @@
 # Goal
 geometry_msgs/PoseStamped target_pose
 float32 speed_ratio
+bool align_yaw
 ---
 # Result
 bool success
