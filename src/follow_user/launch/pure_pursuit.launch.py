@@ -1,21 +1,28 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 def generate_launch_description():
     # Get the path to this package
     pkg_dir = get_package_share_directory('follow_user')
-    
+
     # Get the path to the config file
     params_file = os.path.join(pkg_dir, 'config', 'pure_pursuit_params.yaml')
-    
+
+    # Declare the robot_ip launch argument
+    robot_ip_arg = DeclareLaunchArgument('robot_ip', default_value='192.168.12.1')
+
     return LaunchDescription([
+        robot_ip_arg,
         Node(
             package='follow_user',
             executable='path_search_server.py',
             name='path_search_server',
-            output='screen'
+            output='screen',
+            arguments=['--robot-ip', LaunchConfiguration('robot_ip')]
         ),
         Node(
             package='follow_user',

@@ -1,12 +1,18 @@
-# Follow User Package
+# Follow-User Package
 
-This package enables a robot to follow a path generated from its current pose to a target pose specified by clicking on the RViz interface.
+This package enables a robot to follow a path generated from its current pose to a target pose specified by clicking on the RViz interface. The target pose simulates a moving person that the robot will follow.
 
 ## Execution
 
-To launch the necessary nodes for the follow user functionality, run the following command from the root of the workspace:
+There are two ways to launch the follow-user functionality: click the point on RViz manually or generate a path automatically.
+
+### Manual Point Clicking
+
+To launch the necessary nodes for the follow-user functionality, run the following command from the root of the workspace:
 
 ```bash
+colcon build --packages-select follow_user && source install/setup.bash
+
 ./src/follow_user/follow_user_client.py
 or 
 ./src/follow_user/follow_user_client.py -d # or --debug
@@ -21,9 +27,9 @@ The script will open new terminal windows for each of the following components:
 3.  **Path Following and Search**: Launches the pure pursuit controller and the search path client.
     - `ros2 launch follow_user pure_pursuit.launch.py`
 
-The script checks if a process with a similar name is already running to avoid launching duplicate nodes.
+Click the "Publish Point" button in RViz to set a target point for the robot to follow. The robot will calculate a path to that point using slamware_sdk_server and then start following it. The script checks if a process with a similar name is already running to avoid launching duplicate nodes.
 
-## Person Simulation
+### Person Simulation Automatically (Optional)
 
 This package also includes a person simulator for testing the follow-user functionality without manual clicking in RViz. The simulator publishes `/clicked_point` messages to simulate a moving person in front of the robot.
 
@@ -33,7 +39,7 @@ To run the simulation, use the `--simulate-person` flag with the client script:
 ./src/follow_user/follow_user_client.py -s # or --simulate-person
 ```
 
-This will launch an additional terminal for the `person_simulator.py` script.
+This will launch an additional terminal for the `person_simulator.py` script. The simulator reads a predefined path from `src/follow_user/test/path.json` and publishes a series of `geometry_msgs/PointStamped` messages to the `/clicked_point` topic, simulating a moving person.
 
 ## Code Flow
 

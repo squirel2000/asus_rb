@@ -56,7 +56,7 @@ class PathSearchServerNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     parser = argparse.ArgumentParser(description="Call the SLAMTEC search_path API.")
-    parser.add_argument("--robot-ip", default="192.168.12.1", help="The IP address of the robot.")
+    parser.add_argument("--robot-ip", required=True, help="The IP address of the robot.")
     args, _ = parser.parse_known_args()
     
     path_search_server_node = PathSearchServerNode(robot_ip=args.robot_ip)
