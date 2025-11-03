@@ -14,7 +14,7 @@ To launch the necessary nodes for the follow-user functionality, run the followi
 colcon build --packages-select follow_user && source install/setup.bash
 
 ./src/follow_user/follow_user_client.py
-or 
+# or 
 ./src/follow_user/follow_user_client.py -d # or --debug
 ```
 
