@@ -68,11 +68,12 @@ def main():
         "view_slamware_ros_sdk_server_node.xml": 'ros2 launch slamware_ros_sdk view_slamware_ros_sdk_server_node.xml',
         "pure_pursuit.launch.py": f'ros2 launch follow_user pure_pursuit.launch.py robot_ip:={slamware_ip}'
     }
+    
     if args.simulate_person:
         script_dir = os.path.dirname(os.path.realpath(__file__))
         simulator_path = os.path.join(script_dir, 'test', 'person_simulator.py')
         commands["person_simulator.py"] = f'python3 {simulator_path}'
-
+    
     for process_name, cmd in commands.items():
         if not is_process_running(process_name):
             print(f"Launching {process_name}...")

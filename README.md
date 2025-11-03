@@ -9,6 +9,7 @@ Install ROS 2 Humble and its dependencies [here] (https://docs.ros.org/en/humble
 ```bash
 sudo apt install ros-${ROS_DISTRO}-tf-transformations
 pip install transforms3d
+pip install rosbags matplotlib
 ```
 
 ### 使用 ROS2 SDK控制思岚科技

@@ -1,9 +1,11 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     # Get the path to this package
@@ -14,6 +16,18 @@ def generate_launch_description():
 
     # Declare the robot_ip launch argument
     robot_ip_arg = DeclareLaunchArgument('robot_ip', default_value='192.168.12.1')
+
+    # Include the recording launch file
+    record_log_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            PathJoinSubstitution([
+                FindPackageShare('motion_common'),
+                'launch',
+                'record_log.launch.py'
+            ])
+        ]),
+        launch_arguments={'task': 'follow_user', }.items()
+    )
 
     return LaunchDescription([
         robot_ip_arg,
@@ -31,4 +45,5 @@ def generate_launch_description():
             output='screen',
             parameters=[params_file]
         ),
+        record_log_launch,
     ])
