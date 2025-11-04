@@ -77,6 +77,11 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+install(DIRECTORY
+  scripts/utils/
+  DESTINATION lib/${PROJECT_NAME}/utils
+)
+
 # --- Launch File Installation ---
 install(DIRECTORY
   launch

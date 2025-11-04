@@ -10,6 +10,8 @@ Install ROS 2 Humble and its dependencies [here] (https://docs.ros.org/en/humble
 sudo apt install ros-${ROS_DISTRO}-tf-transformations
 pip install transforms3d
 pip install rosbags matplotlib
+# For Zenbo's head control
+sudo apt install python3-serial
 ```
 
 ### 使用 ROS2 SDK控制思岚科技
