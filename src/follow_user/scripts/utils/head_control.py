@@ -3,6 +3,9 @@ import math
 import argparse
 import time
 
+# Head control for the robot using serial communication, and the protocol defined in:
+# https://asus.sharepoint.com/:w:/r/sites/ZenGimbal_Ver2.0/_layouts/15/Doc.aspx?sourcedoc=%7B563FB2AC-D8AA-4B42-B4BB-808C06ECD9F9%7D&file=TOBY%20communications%20protocol_beta(versionb0.91).docx&wdOrigin=TEAMS-WEB.p2p_ns.rwc&action=default&mobileredirect=true
+#
 # Usage: For example:
 # python3 src/follow_user/scripts/utils/head_control.py --yaw 10.0 --pitch -5.0 --duration 1000
 
@@ -10,6 +13,9 @@ import time
 SERIAL_PORT = "/dev/ttyACM0"
 BAUDRATE = 115200
 ALPHA = 0.1  # Smoothing factor for low-pass filter
+# Yaw and pitch limits
+YAW_MIN, YAW_MAX = -45.0, 45.0
+PITCH_MIN, PITCH_MAX = -15.0, 55.0
 
 class HeadController:
     def __init__(self, logger=None):
@@ -33,6 +39,10 @@ class HeadController:
         self.smoothed_pitch = ALPHA * pitch + (1 - ALPHA) * self.smoothed_pitch
         yaw_deg = math.degrees(self.smoothed_yaw)
         pitch_deg = math.degrees(self.smoothed_pitch)
+
+        # Limit yaw and pitch ranges
+        yaw_deg = max(YAW_MIN, min(YAW_MAX, yaw_deg))
+        pitch_deg = max(PITCH_MIN, min(PITCH_MAX, pitch_deg))
 
         cmd = self.build_neck_position_command(yaw_deg, pitch_deg, duration_ms)
         if self.serial_port and self.serial_port.is_open:

@@ -16,9 +16,6 @@ class TaskCoordinatorNode(Node):
     def __init__(self):
         super().__init__('task_coordinator_node')
 
-        # Parameters
-        self.declare_parameter('user_pose_topic', '/user_tracker/target_pose')
-
         # Action Clients
         self.follow_user_client = ActionClient(self, FollowUser, 'follow_user')
         self.navigate_client = ActionClient(self, Navigate, 'navigate_to_pose')
@@ -27,14 +24,13 @@ class TaskCoordinatorNode(Node):
         self.task_server = ActionServer(self, Task, 'task_server', self.execute_task_callback)
         self.follow_user_server = ActionServer(self, FollowUser, 'follow_user_task', self.execute_follow_user_callback)
 
+        # Publishers
+        self.human_relative_pose_publisher = self.create_publisher(PoseStamped, '/human_relative_pose_front', 10)
+
         # Subscribers
-        user_pose_topic = self.get_parameter('user_pose_topic').get_parameter_value().string_value
-        self.user_pose_subscription = self.create_subscription(
-            PoseStamped,
-            user_pose_topic,
-            self.user_pose_callback,
-            10)
-        
+        self.user_pose_subscription = self.create_subscription(PoseStamped, '/human_relative_pose_front_raw', self.human_relative_pose_callback, 10)
+
+        # State variables        
         self.follow_user_goal_handle = None
         self.navigate_goal_handle = None
         self.current_user_pose = None
@@ -50,7 +46,9 @@ class TaskCoordinatorNode(Node):
 
         self.get_logger().info('Task Coordinator Node has been started.')
 
-    def user_pose_callback(self, msg):
+    def human_relative_pose_callback(self, msg):
+        # TODO: Add any processing if needed
+        self.human_relative_pose_publisher.publish(msg)
         self.current_user_pose = msg
         if self.is_follow_mode and self.follow_user_goal_handle and self.follow_user_goal_handle.is_active:
             self.send_follow_user_goal(self.current_user_pose)

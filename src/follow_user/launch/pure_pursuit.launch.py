@@ -15,7 +15,7 @@ def generate_launch_description():
     params_file = os.path.join(pkg_dir, 'config', 'pure_pursuit_params.yaml')
 
     # Declare the robot_ip launch argument
-    robot_ip_arg = DeclareLaunchArgument('robot_ip', default_value='192.168.12.1')
+    robot_ip_arg = DeclareLaunchArgument('robot_ip', default_value='192.168.11.1')
 
     # Include the recording launch file
     record_log_launch = IncludeLaunchDescription(

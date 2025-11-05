@@ -60,14 +60,23 @@ def main():
     parser = argparse.ArgumentParser(description='Launch script for the follow_user project.')
     parser.add_argument('-d', '--debug', action='store_true', help="Keep terminals open and print commands.")
     parser.add_argument('-s', '--simulate-person', action='store_true', help="Launch the person simulator.")
+    parser.add_argument('-n', '--new-arch', action='store_true', help="Launch the new 3-node architecture.")
     args = parser.parse_args()
 
     slamware_ip = get_slamware_ip()
     commands = {
         "slamware_ros_sdk_server_node.xml": f'ros2 launch slamware_ros_sdk slamware_ros_sdk_server_node.xml ip_address:={slamware_ip} port:=1448',
         "view_slamware_ros_sdk_server_node.xml": 'ros2 launch slamware_ros_sdk view_slamware_ros_sdk_server_node.xml',
-        "pure_pursuit.launch.py": f'ros2 launch follow_user pure_pursuit.launch.py robot_ip:={slamware_ip}'
     }
+
+    if args.new_arch:
+        print("Launching new 3-node architecture in separate terminals...")
+        commands["follow_user_vision_node.py"] = 'ros2 run follow_user follow_user_vision_node.py'
+        commands["task_coordinator_node.py"] = 'ros2 run task_coordinator task_coordinator_node.py'
+        commands["follow_user_motion_node.py"] = f'ros2 launch follow_user follow_user.launch.py robot_ip:={slamware_ip}'
+    else:
+        print("Launching original pure pursuit architecture...")
+        commands["pure_pursuit.launch.py"] = f'ros2 launch follow_user pure_pursuit.launch.py robot_ip:={slamware_ip}'
     
     if args.simulate_person:
         script_dir = os.path.dirname(os.path.realpath(__file__))
