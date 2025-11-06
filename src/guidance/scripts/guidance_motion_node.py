@@ -162,11 +162,11 @@ class GuidanceActionServer(BaseNavigationNode):
             self._last_speed_change_time = current_time
         return status
 
-    def _resume_navigation(self, target_pose: PoseStamped, speed_ratio: float, align_yaw: bool):
+    def _resume_navigation(self, target_pose: PoseStamped, speed_ratio: float, align_yaw: bool, via_track: bool):
         """Resume navigation when human is re-detected."""
         self.get_logger().info("Human re-detected, resuming navigation")
         self.publish_cancel()
-        self.publish_move_to(target_pose, speed_ratio, align_yaw)
+        self.publish_move_to(target_pose, speed_ratio, align_yaw, via_track)
 
     async def publish_cancel_and_resume_max_speed(self):
         """Publish cancel and reset speed to default max speed."""
@@ -190,12 +190,13 @@ class GuidanceActionServer(BaseNavigationNode):
         target_pose = goal_handle.request.target_pose
         speed_ratio = goal_handle.request.speed_ratio
         align_yaw = goal_handle.request.align_yaw
+        via_track = goal_handle.request.via_track
         user_id = goal_handle.request.user_id
         feedback_msg = Guidance.Feedback()
         result = Guidance.Result()
 
         # Create a navigation action via publisher
-        self.publish_move_to(target_pose, speed_ratio, align_yaw)
+        self.publish_move_to(target_pose, speed_ratio, align_yaw, via_track)
         
         _waiting_timeout = self.stuck_timeout_sec / 2
         _last_move_time = self.get_clock().now()
@@ -215,14 +216,14 @@ class GuidanceActionServer(BaseNavigationNode):
                 timeout_message = f"Failed to dismiss the AMR device error warning within {_waiting_timeout} seconds."
                 result.message = "Goal aborted due to a device error on the AMR."
                 # trying to publish again
-                self.publish_move_to(target_pose, speed_ratio, align_yaw)
+                self.publish_move_to(target_pose, speed_ratio, align_yaw, via_track)
             
             elif not self.remaining_targets:
                 self.get_logger().warn('Waiting for the AMR remaining target points.')
                 timeout_message = f"Waiting for the AMR remaining target points for {_waiting_timeout} seconds."
                 result.message = "Goal aborted because no valid target points exist."
                 # trying to publish again
-                self.publish_move_to(target_pose, speed_ratio, align_yaw)
+                self.publish_move_to(target_pose, speed_ratio, align_yaw, via_track)
             else:
                 if not self.global_path and not self._is_goal_reached(self.current_pose, target_pose, with_yaw=False):
                     self.get_logger().warn('Try to find a path to the target pose.')
@@ -303,7 +304,7 @@ class GuidanceActionServer(BaseNavigationNode):
             if self._is_human_lost and self._human_lost_start_time and \
                (self.get_clock().now() - self._human_lost_start_time).nanoseconds / 1e9 > self.lost_timeout_sec:
                 if human_distance <= self.lost_distance_threshold:
-                    self._resume_navigation(target_pose, speed_ratio)
+                    self._resume_navigation(target_pose, speed_ratio, align_yaw, via_track)
                     self._is_human_lost = False
                     self._human_lost_start_time = None
 
