@@ -66,6 +66,21 @@ This will launch an additional terminal for the `person_simulator.py` script. Th
   ./src/follow_user/follow_user_client.py -n -s
   ```
 
+## Vision Services
+
+Launching all vision services 
+
+```bash
+bash ~/SW2/VisionService/launch_vision_all_tmux_terminal.sh
+```
+
+Re-launch all vision services by disabling and re-enabling the following service:
+
+```bash
+ros2 service call /enable_CV vision_srv/srv/SetTask “{task: follow realsense2 realsense, active: True}”
+```
+
+
 ## Code Flow
 
 Here is a high-level overview of the code and data flow for the follow_user functionality:

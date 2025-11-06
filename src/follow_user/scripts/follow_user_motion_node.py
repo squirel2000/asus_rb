@@ -11,10 +11,13 @@ import numpy as np
 import tf2_ros
 import tf2_geometry_msgs.tf2_geometry_msgs
 from utils.head_control import HeadController
+from utils.motion_utils import MotionUtils
 from follow_user.action import FollowUser
+from copy import deepcopy
 
 # Constants
 CAMERA_OFFSET = np.array([0.0, 0.0, 0.0]) # Camera position (x,y,z) in base_link frame
+FOLLOW_USER_OFFSET = 0.25 # Move the target point closer to avoid path not found issues
 
 class FollowUserMotionNode(Node):
     """
@@ -57,123 +60,82 @@ class FollowUserMotionNode(Node):
         # State
         self.robot_pose = None
         self.goal_handle = None
-        self.last_angular_vel = 0.0
-        self.last_time = self.get_clock().now()
 
         # Parameters for smooth rotation
         self.declare_parameter('max_angular_vel', 1.2)
-        self.declare_parameter('angular_acceleration', 0.20) # Using linear_acceleration as a default
-        self.declare_parameter('angular_deceleration', 0.40) # Using linear_deceleration as a default
-        self.max_angular_vel = self.get_parameter('max_angular_vel').get_parameter_value().double_value
-        self.angular_acceleration = self.get_parameter('angular_acceleration').get_parameter_value().double_value
-        self.angular_deceleration = self.get_parameter('angular_deceleration').get_parameter_value().double_value
+        self.declare_parameter('angular_acceleration', 0.20)
+        self.declare_parameter('angular_deceleration', 0.40)
+        
+        self.motion_params = {
+            'max_angular_vel': self.get_parameter('max_angular_vel').get_parameter_value().double_value,
+            'angular_acceleration': self.get_parameter('angular_acceleration').get_parameter_value().double_value,
+            'angular_deceleration': self.get_parameter('angular_deceleration').get_parameter_value().double_value
+        }
+
+        # Utility classes
+        self.motion_utils = MotionUtils(self)
 
 
     def robot_pose_callback(self, msg):
         self.robot_pose = msg
 
-    def relative_pose_callback(self, msg):
+    def relative_pose_callback(self, human_relative_pose):
         if self.goal_handle is None or not self.goal_handle.is_active:
             return
 
-        self._update_head_tracking(msg)
+        # Handle head tracking
+        self._update_head_tracking(human_relative_pose)
 
-        # Check if the user is within the following distance
-        x_rel, y_rel = msg.pose.position.x, msg.pose.position.y
+        # Handle motion control
+        x_rel, y_rel = human_relative_pose.pose.position.x, human_relative_pose.pose.position.y
         current_distance = math.sqrt(x_rel**2 + y_rel**2)
         following_distance = self.goal_handle.request.following_distance
 
         if current_distance < following_distance:
             self.get_logger().info(f"User is within following distance ({current_distance:.2f}m < {following_distance:.2f}m). Rotating to face user.")
-            # Stop path following by sending an empty path
-            empty_path = Path()
-            empty_path.header.stamp = self.get_clock().now().to_msg()
-            empty_path.header.frame_id = 'slamware_map'
-            self.path_publisher.publish(empty_path)
+            self._handle_rotation_to_face_user(human_relative_pose)
+        else:
+            self._handle_path_following(human_relative_pose)
 
-            # Take over control to rotate towards the user
-            angle_to_user = math.atan2(y_rel, x_rel)
-            
-            # 1. Implement deadband to prevent jitter
-            if abs(angle_to_user) < math.radians(5.0): # +/- 5 degrees
-                target_angular_vel = 0.0
-            else:
-                # Simple proportional controller for target velocity
-                target_angular_vel = 0.8 * angle_to_user
+    def _handle_rotation_to_face_user(self, human_relative_pose):
+        """Stops path following and rotates the robot to face the user."""
+        # Stop path following by sending an empty path
+        empty_path = Path()
+        empty_path.header.stamp = self.get_clock().now().to_msg()
+        empty_path.header.frame_id = 'slamware_map'
+        self.path_publisher.publish(empty_path)
 
-            # 2. Apply acceleration and velocity limits
-            current_time = self.get_clock().now()
-            dt = (current_time - self.last_time).nanoseconds / 1e9
-            self.last_time = current_time
+        # Take over control to rotate towards the user
+        x_rel, y_rel = human_relative_pose.pose.position.x, human_relative_pose.pose.position.y
+        angle_to_user = math.atan2(y_rel, x_rel)
+        final_angular_vel = self.motion_utils.calculate_smooth_angular_velocity(angle_to_user, self.motion_params)
 
-            # Calculate the change in velocity based on acceleration limits
-            max_vel_change = self.angular_acceleration * dt
-            min_vel_change = -self.angular_deceleration * dt
+        twist_msg = Twist()
+        twist_msg.linear.x = 0.0
+        twist_msg.angular.z = final_angular_vel
+        self.cmd_vel_publisher.publish(twist_msg)
 
-            # Smoothly ramp the velocity
-            if target_angular_vel > self.last_angular_vel:
-                new_angular_vel = self.last_angular_vel + max_vel_change
-                if new_angular_vel > target_angular_vel:
-                    new_angular_vel = target_angular_vel
-            else:
-                new_angular_vel = self.last_angular_vel + min_vel_change
-                if new_angular_vel < target_angular_vel:
-                    new_angular_vel = target_angular_vel
-            
-            # Clamp to the absolute maximum velocity
-            final_angular_vel = np.clip(new_angular_vel, -self.max_angular_vel, self.max_angular_vel)
-            self.last_angular_vel = final_angular_vel
-
-            twist_msg = Twist()
-            twist_msg.linear.x = 0.0
-            twist_msg.angular.z = final_angular_vel
-            self.cmd_vel_publisher.publish(twist_msg)
-            return
-
-        if self.robot_pose is None:
-            self.get_logger().warn("No robot pose available to calculate absolute user pose.")
-            return
-
+    def _handle_path_following(self, human_relative_pose):
+        """Calculates a path to the user and publishes it."""
         try:
-            msg.header.stamp = rclpy.time.Time().to_msg()
-            absolute_user_pose = self.tf_buffer.transform(
-                msg,
-                'slamware_map',
-                timeout=rclpy.duration.Duration(seconds=1.0)
-            )
-
-            x = absolute_user_pose.pose.position.x
-            y = absolute_user_pose.pose.position.y
-            path_points = self.search_path(x, y)
+            # Create a copy to avoid modifying the original message
+            pose_to_transform = deepcopy(human_relative_pose)
+            pose_to_transform.header.stamp = rclpy.time.Time().to_msg()
+            
+            # Apply an offset to the target point to avoid path planning failures
+            pose_to_transform.pose.position.x -= FOLLOW_USER_OFFSET
+            human_absolute_pose = self.tf_buffer.transform(pose_to_transform, 'slamware_map', timeout=rclpy.duration.Duration(seconds=1.0))
+            target_x = human_absolute_pose.pose.position.x
+            target_y = human_absolute_pose.pose.position.y
+            path_points = self.motion_utils.search_path(self.robot_ip, target_x, target_y)
 
             if path_points:
-                path_msg = self.convert_points_to_path(path_points, 'slamware_map')
+                path_msg = self.motion_utils.convert_points_to_path(path_points, 'slamware_map')
                 self.path_publisher.publish(path_msg)
-                self.get_logger().info(f"Published path with {len(path_msg.poses)} points to ({x:.2f}, {y:.2f})")
+                self.get_logger().info(f"Published path with {len(path_msg.poses)} points to ({target_x:.2f}, {target_y:.2f})")
 
         except tf2_ros.TransformException as e:
             self.get_logger().error(f'Could not transform pose for path planning: {e}')
-
-    def execute_callback(self, goal_handle):
-        self.get_logger().info(f'Executing goal for user: {goal_handle.request.user_id}')
-        self.goal_handle = goal_handle
-
-        # Print the goal handle information
-        self.get_logger().info(f'goal_handle: {self.goal_handle} and is_active: {self.goal_handle.is_active if self.goal_handle else "N/A"}')
-
-        while rclpy.ok() and self.goal_handle.is_active:
-            if self.goal_handle.is_cancel_requested:
-                self.goal_handle.canceled()
-                self.get_logger().info('Goal canceled')
-                # Publish an empty path to stop the pure pursuit controller
-                self.path_publisher.publish(Path())
-                self.goal_handle = None
-                return FollowUser.Result(final_status='Goal canceled')
-            rclpy.spin_once(self, timeout_sec=0.1)
-
-        goal_handle.succeed()
-        self.goal_handle = None
-        return FollowUser.Result(final_status='Follow task finished.')
 
     def _update_head_tracking(self, relative_pose_msg):
         x, y, z = relative_pose_msg.pose.position.x, relative_pose_msg.pose.position.y, relative_pose_msg.pose.position.z
@@ -185,44 +147,38 @@ class FollowUserMotionNode(Node):
         pitch = math.atan2(z_cam, math.sqrt(x_cam**2 + y_cam**2))
 
         self.get_logger().info(f"Head tracking -> Dist: {distance:.2f}m, Yaw: {math.degrees(yaw):.2f}°, Pitch: {math.degrees(pitch):.2f}°")
-
+        if self.head_controller:
+            self.head_controller.control_head(yaw, pitch)
+        
+        # Publish feedback to action client
         feedback_msg = FollowUser.Feedback()
         feedback_msg.current_user_distance = distance
         feedback_msg.status = "Following user..."
-        if self.robot_pose:
-            feedback_msg.current_pose = self.robot_pose
+        feedback_msg.current_pose = self.robot_pose
 
         if self.goal_handle and self.goal_handle.is_active:
             self.goal_handle.publish_feedback(feedback_msg)
 
-        if self.head_controller:
-            self.head_controller.control_head(yaw, pitch)
 
-    def search_path(self, x, y, timeout=100):
-        url = f"http://{self.robot_ip}:1448/api/core/motion/v1/:search_path"
-        payload = {"target": {"x": x, "y": y}, "timeout": timeout}
-        headers = {"Content-Type": "application/json"}
-        try:
-            response = requests.post(url, headers=headers, json=payload, timeout=timeout/1000 + 5)
-            response.raise_for_status()
-            return response.json().get("path_points")
-        except requests.exceptions.RequestException as e:
-            self.get_logger().error(f"Error calling search_path: {e}")
-            return None
+    def execute_callback(self, goal_handle):
+        self.goal_handle = goal_handle
+        self.get_logger().info(f'Executing goal for user: {self.goal_handle.request.user_id}')
 
-    def convert_points_to_path(self, points, frame_id):
-        path = Path()
-        path.header.stamp = self.get_clock().now().to_msg()
-        path.header.frame_id = frame_id
-        for point in points:
-            pose = PoseStamped()
-            pose.header.stamp = path.header.stamp
-            pose.header.frame_id = frame_id
-            pose.pose.position.x = float(point[0])
-            pose.pose.position.y = float(point[1])
-            path.poses.append(pose)
-        return path
+        while rclpy.ok() and self.goal_handle.is_active:
+            if self.goal_handle.is_cancel_requested:
+                self.goal_handle.canceled()
+                self.get_logger().info('Goal canceled')
+                # Publish an empty path to stop the pure pursuit controller
+                self.path_publisher.publish(Path()) # Publish empty path
+                self.goal_handle = None
+                return FollowUser.Result(final_status='Goal canceled')
+            rclpy.spin_once(self, timeout_sec=0.1)
 
+        # If the loop exits because the goal is no longer active (but not cancelled), succeed it.
+        self.goal_handle.succeed()
+        self.goal_handle = None
+        return FollowUser.Result(final_status='Follow task finished.')
+    
     def destroy_node(self):
         if self.head_controller:
             self.head_controller.destroy()

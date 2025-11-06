@@ -58,14 +58,16 @@ class FollowUserVisionNode(Node):
             relative_pose.pose.position.y = point_in_base_frame.point.y
             relative_pose.pose.position.z = point_in_base_frame.point.z
 
-            # Calculate orientation to face the point from the origin of base_link
-            yaw = math.atan2(point_in_base_frame.point.y, point_in_base_frame.point.x)
-            # Simple conversion from yaw to quaternion
-            relative_pose.pose.orientation.w = math.cos(yaw / 2.0)
-            relative_pose.pose.orientation.z = math.sin(yaw / 2.0)
+            # Since the clicked point only provides position, we cannot know the user's
+            # orientation. We assume a neutral orientation (no rotation) relative to the base_link frame.
+            # A quaternion with w=1.0 represents no rotation.
+            relative_pose.pose.orientation.w = 1.0
+            relative_pose.pose.orientation.x = 0.0
+            relative_pose.pose.orientation.y = 0.0
+            relative_pose.pose.orientation.z = 0.0
 
             self.relative_pose_publisher.publish(relative_pose)
-            self.get_logger().info(f"User pose r.t.w robot: x={relative_pose.pose.position.x:.2f}, y={relative_pose.pose.position.y:.2f}, yaw={yaw:.2f} rad")
+            self.get_logger().info(f"User pose relative to robot: x={relative_pose.pose.position.x:.2f}, y={relative_pose.pose.position.y:.2f}")
 
         except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
             self.get_logger().error(f'Could not transform point: {e}')
