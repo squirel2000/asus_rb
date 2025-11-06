@@ -4,6 +4,8 @@ import time
 import os
 import argparse
 
+from click import command
+
 def is_process_running(process_name):
     """
     Checks if a process with a given name is running.
@@ -72,8 +74,9 @@ def main():
     if args.new_arch:
         print("Launching new 3-node architecture in separate terminals...")
         commands["follow_user_vision_node.py"] = 'ros2 run follow_user follow_user_vision_node.py'
-        commands["task_coordinator_node.py"] = 'ros2 run task_coordinator task_coordinator_node.py'
         commands["follow_user_motion_node.py"] = f'ros2 launch follow_user follow_user.launch.py robot_ip:={slamware_ip}'
+        commands["task_coordinator_node.py"] = 'ros2 run task_coordinator task_coordinator_node.py'
+        commands["task_client.py"] = f'ros2 run task_coordinator task_client.py follow'
     else:
         print("Launching original pure pursuit architecture...")
         commands["pure_pursuit.launch.py"] = f'ros2 launch follow_user pure_pursuit.launch.py robot_ip:={slamware_ip}'

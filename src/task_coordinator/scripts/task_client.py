@@ -29,6 +29,7 @@ class TaskClientNode(Node):
         elif self.args.action == 'follow':
             goal_msg = FollowUser.Goal()
             goal_msg.user_id = self.args.user_id
+            goal_msg.following_distance = self.args.following_distance
 
         self.client.wait_for_server()
 
@@ -44,17 +45,14 @@ class TaskClientNode(Node):
             return
 
         self.get_logger().info('Goal accepted :)')
-
-        self.get_result_future = goal_handle.get_result_async()
-        self.get_result_future.add_done_callback(self.get_result_callback)
+        rclpy.shutdown()
 
     def get_result_callback(self, future):
         result = future.result().result
         if self.args.action == 'navigate':
             self.get_logger().info(f'Result: {result.success}')
         elif self.args.action == 'follow':
-            self.get_logger().info(f'Result: {result.final_status}')
-        self.destroy_node()
+            self.get_logger().info(f'Result: {result.message}')
         rclpy.shutdown()
 
     def feedback_callback(self, feedback_msg):
@@ -73,13 +71,12 @@ def main(args=None):
     parser.add_argument('--y', type=float, default=1.0, help='y position for navigation goal')
     parser.add_argument('--w', type=float, default=1.0, help='w orientation for navigation goal')
     parser.add_argument('--user_id', type=str, default='user_1', help='user id for follow goal')
+    parser.add_argument('--following_distance', type=float, default=0.40, help='desired following distance for follow goal')
     args = parser.parse_args()
 
     node = TaskClientNode(args)
     node.send_goal()
     rclpy.spin(node)
-
-    # The node will be destroyed and rclpy shut down in get_result_callback
 
 if __name__ == '__main__':
     main()

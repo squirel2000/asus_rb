@@ -9,7 +9,7 @@ import argparse
 import math
 import numpy as np
 import tf2_ros
-from tf2_geometry_msgs import do_transform_pose
+import tf2_geometry_msgs.tf2_geometry_msgs
 from utils.head_control import HeadController
 from follow_user.action import FollowUser
 
@@ -29,23 +29,19 @@ class FollowUserMotionNode(Node):
         self.robot_ip = robot_ip
         self.control_head = control_head
 
-        # Publishers
-        self.path_publisher = self.create_publisher(Path, 'follow_user/planned_path', 10)
-
-        # Subscribers
-        self.robot_pose_sub = self.create_subscription(PoseStamped, '/robot_pose', self.robot_pose_callback, 10)
-        self.relative_pose_sub = self.create_subscription(
-            PoseStamped,
-            '/human_relative_pose_front',
-            self.relative_pose_callback,
-            10)
-
         # Action Server
         self._action_server = ActionServer(
             self,
             FollowUser,
             'follow_user',
             self.execute_callback)
+        
+        # Publishers
+        self.path_publisher = self.create_publisher(Path, 'follow_user/planned_path', 10)
+
+        # Subscribers
+        self.robot_pose_sub = self.create_subscription(PoseStamped, '/robot_pose', self.robot_pose_callback, 10)
+        self.relative_pose_sub = self.create_subscription(PoseStamped, '/human_relative_pose_front', self.relative_pose_callback, 10)
 
         # TF
         self.tf_buffer = tf2_ros.Buffer()
@@ -65,34 +61,64 @@ class FollowUserMotionNode(Node):
         self.robot_pose = msg
 
     def relative_pose_callback(self, msg):
+        
+        # Print relative_pose_sub message
+        self.get_logger().info(f'goal_handle: {self.goal_handle} and is_active: {self.goal_handle.is_active if self.goal_handle else "N/A"}')
+        self.get_logger().info(f'Relative User Pose: {msg.pose.position.x}, {msg.pose.position.y}, {msg.pose.position.z}')
+
+
         if self.goal_handle is None or not self.goal_handle.is_active:
             return
 
         self._update_head_tracking(msg)
+
+        # Check if the user is within the following distance
+        x_rel, y_rel = msg.pose.position.x, msg.pose.position.y
+        current_distance = math.sqrt(x_rel**2 + y_rel**2)
+        following_distance = self.goal_handle.request.following_distance
+
+        # TODO: Make the robot purely rotational if within following distance
+        if current_distance < following_distance:
+            self.get_logger().info(f"User is within following distance ({current_distance:.2f}m < {following_distance:.2f}m). Stopping motion.")
+            # Publish an empty path to make the robot stop
+            empty_path = Path()
+            empty_path.header.stamp = self.get_clock().now().to_msg()
+            empty_path.header.frame_id = 'slamware_map'
+            self.path_publisher.publish(empty_path)
+            return
 
         if self.robot_pose is None:
             self.get_logger().warn("No robot pose available to calculate absolute user pose.")
             return
 
         try:
-            transform = self.tf_buffer.lookup_transform('map', 'base_link', rclpy.time.Time())
-            absolute_user_pose = do_transform_pose(msg, transform)
+            # To avoid extrapolation errors, we transform the pose at the latest available time
+            # by setting the timestamp in the header to zero.
+            msg.header.stamp = rclpy.time.Time().to_msg()
+            absolute_user_pose = self.tf_buffer.transform(
+                msg,
+                'slamware_map',
+                timeout=rclpy.duration.Duration(seconds=1.0)
+            )
 
             x = absolute_user_pose.pose.position.x
             y = absolute_user_pose.pose.position.y
             path_points = self.search_path(x, y)
 
             if path_points:
-                path_msg = self.convert_points_to_path(path_points, 'map')
+                path_msg = self.convert_points_to_path(path_points, 'slamware_map')
                 self.path_publisher.publish(path_msg)
                 self.get_logger().info(f"Published path with {len(path_msg.poses)} points to ({x:.2f}, {y:.2f})")
 
-        except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
+        except tf2_ros.TransformException as e:
             self.get_logger().error(f'Could not transform pose for path planning: {e}')
 
     def execute_callback(self, goal_handle):
         self.get_logger().info(f'Executing goal for user: {goal_handle.request.user_id}')
         self.goal_handle = goal_handle
+
+        # Print the goal handle information
+        self.get_logger().info(f'goal_handle: {self.goal_handle} and is_active: {self.goal_handle.is_active if self.goal_handle else "N/A"}')
 
         while rclpy.ok() and self.goal_handle.is_active:
             if self.goal_handle.is_cancel_requested:
@@ -118,7 +144,11 @@ class FollowUserMotionNode(Node):
         self.get_logger().info(f"Head tracking -> Dist: {distance:.2f}m, Yaw: {math.degrees(yaw):.2f}°, Pitch: {math.degrees(pitch):.2f}°")
 
         feedback_msg = FollowUser.Feedback()
-        feedback_msg.current_distance = distance
+        feedback_msg.current_user_distance = distance
+        feedback_msg.status = "Following user..."
+        if self.robot_pose:
+            feedback_msg.current_pose = self.robot_pose
+
         if self.goal_handle and self.goal_handle.is_active:
             self.goal_handle.publish_feedback(feedback_msg)
 
