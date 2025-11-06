@@ -71,7 +71,7 @@ def main(args=None):
     parser.add_argument('--y', type=float, default=1.0, help='y position for navigation goal')
     parser.add_argument('--w', type=float, default=1.0, help='w orientation for navigation goal')
     parser.add_argument('--user_id', type=str, default='user_1', help='user id for follow goal')
-    parser.add_argument('--following_distance', type=float, default=0.40, help='desired following distance for follow goal')
+    parser.add_argument('--following_distance', type=float, default=0.80, help='desired following distance for follow goal')
     args = parser.parse_args()
 
     node = TaskClientNode(args)

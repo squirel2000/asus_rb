@@ -67,7 +67,7 @@ PurePursuitController::PurePursuitController() : Node("pure_pursuit_controller")
         path_topic_, 10,
         std::bind(&PurePursuitController::pathCallback, this, std::placeholders::_1));
         
-odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+    odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
         odom_topic_, 10, 
         std::bind(&PurePursuitController::odomCallback, this, std::placeholders::_1));
 

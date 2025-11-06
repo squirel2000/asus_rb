@@ -2,7 +2,7 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionServer
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Path
 import requests
 import argparse
@@ -38,6 +38,7 @@ class FollowUserMotionNode(Node):
         
         # Publishers
         self.path_publisher = self.create_publisher(Path, 'follow_user/planned_path', 10)
+        self.cmd_vel_publisher = self.create_publisher(Twist, '/cmd_vel', 10)
 
         # Subscribers
         self.robot_pose_sub = self.create_subscription(PoseStamped, '/robot_pose', self.robot_pose_callback, 10)
@@ -56,17 +57,22 @@ class FollowUserMotionNode(Node):
         # State
         self.robot_pose = None
         self.goal_handle = None
+        self.last_angular_vel = 0.0
+        self.last_time = self.get_clock().now()
+
+        # Parameters for smooth rotation
+        self.declare_parameter('max_angular_vel', 1.2)
+        self.declare_parameter('angular_acceleration', 0.20) # Using linear_acceleration as a default
+        self.declare_parameter('angular_deceleration', 0.40) # Using linear_deceleration as a default
+        self.max_angular_vel = self.get_parameter('max_angular_vel').get_parameter_value().double_value
+        self.angular_acceleration = self.get_parameter('angular_acceleration').get_parameter_value().double_value
+        self.angular_deceleration = self.get_parameter('angular_deceleration').get_parameter_value().double_value
+
 
     def robot_pose_callback(self, msg):
         self.robot_pose = msg
 
     def relative_pose_callback(self, msg):
-        
-        # Print relative_pose_sub message
-        self.get_logger().info(f'goal_handle: {self.goal_handle} and is_active: {self.goal_handle.is_active if self.goal_handle else "N/A"}')
-        self.get_logger().info(f'Relative User Pose: {msg.pose.position.x}, {msg.pose.position.y}, {msg.pose.position.z}')
-
-
         if self.goal_handle is None or not self.goal_handle.is_active:
             return
 
@@ -77,14 +83,51 @@ class FollowUserMotionNode(Node):
         current_distance = math.sqrt(x_rel**2 + y_rel**2)
         following_distance = self.goal_handle.request.following_distance
 
-        # TODO: Make the robot purely rotational if within following distance
         if current_distance < following_distance:
-            self.get_logger().info(f"User is within following distance ({current_distance:.2f}m < {following_distance:.2f}m). Stopping motion.")
-            # Publish an empty path to make the robot stop
+            self.get_logger().info(f"User is within following distance ({current_distance:.2f}m < {following_distance:.2f}m). Rotating to face user.")
+            # Stop path following by sending an empty path
             empty_path = Path()
             empty_path.header.stamp = self.get_clock().now().to_msg()
             empty_path.header.frame_id = 'slamware_map'
             self.path_publisher.publish(empty_path)
+
+            # Take over control to rotate towards the user
+            angle_to_user = math.atan2(y_rel, x_rel)
+            
+            # 1. Implement deadband to prevent jitter
+            if abs(angle_to_user) < math.radians(5.0): # +/- 5 degrees
+                target_angular_vel = 0.0
+            else:
+                # Simple proportional controller for target velocity
+                target_angular_vel = 0.8 * angle_to_user
+
+            # 2. Apply acceleration and velocity limits
+            current_time = self.get_clock().now()
+            dt = (current_time - self.last_time).nanoseconds / 1e9
+            self.last_time = current_time
+
+            # Calculate the change in velocity based on acceleration limits
+            max_vel_change = self.angular_acceleration * dt
+            min_vel_change = -self.angular_deceleration * dt
+
+            # Smoothly ramp the velocity
+            if target_angular_vel > self.last_angular_vel:
+                new_angular_vel = self.last_angular_vel + max_vel_change
+                if new_angular_vel > target_angular_vel:
+                    new_angular_vel = target_angular_vel
+            else:
+                new_angular_vel = self.last_angular_vel + min_vel_change
+                if new_angular_vel < target_angular_vel:
+                    new_angular_vel = target_angular_vel
+            
+            # Clamp to the absolute maximum velocity
+            final_angular_vel = np.clip(new_angular_vel, -self.max_angular_vel, self.max_angular_vel)
+            self.last_angular_vel = final_angular_vel
+
+            twist_msg = Twist()
+            twist_msg.linear.x = 0.0
+            twist_msg.angular.z = final_angular_vel
+            self.cmd_vel_publisher.publish(twist_msg)
             return
 
         if self.robot_pose is None:
@@ -92,8 +135,6 @@ class FollowUserMotionNode(Node):
             return
 
         try:
-            # To avoid extrapolation errors, we transform the pose at the latest available time
-            # by setting the timestamp in the header to zero.
             msg.header.stamp = rclpy.time.Time().to_msg()
             absolute_user_pose = self.tf_buffer.transform(
                 msg,
@@ -124,6 +165,8 @@ class FollowUserMotionNode(Node):
             if self.goal_handle.is_cancel_requested:
                 self.goal_handle.canceled()
                 self.get_logger().info('Goal canceled')
+                # Publish an empty path to stop the pure pursuit controller
+                self.path_publisher.publish(Path())
                 self.goal_handle = None
                 return FollowUser.Result(final_status='Goal canceled')
             rclpy.spin_once(self, timeout_sec=0.1)
