@@ -12,6 +12,7 @@ import tf2_ros
 import tf2_geometry_msgs.tf2_geometry_msgs
 from utils.head_control import HeadController
 from utils.motion_utils import MotionUtils
+from utils.pure_pursuit_controller import PurePursuitController
 from follow_user.action import FollowUser
 from copy import deepcopy
 
@@ -59,12 +60,30 @@ class FollowUserMotionNode(Node):
 
         # State
         self.robot_pose = None
+        self.human_relative_pose = None
         self.goal_handle = None
 
         # Parameters for smooth rotation
         self.declare_parameter('max_angular_vel', 1.2)
         self.declare_parameter('angular_acceleration', 0.20)
         self.declare_parameter('angular_deceleration', 0.40)
+
+        # Parameters for pure pursuit
+        self.declare_parameter("lookahead_dist", 1.0)
+        self.declare_parameter("min_lookahead_dist", 0.5)
+        self.declare_parameter("max_lookahead_dist", 1.5)
+        self.declare_parameter("lookahead_time", 1.5)
+        self.declare_parameter("desired_linear_vel", 0.5)
+        self.declare_parameter("max_linear_vel", 0.20)
+        self.declare_parameter("heading_error_for_pure_rotation", 1.57)
+        self.declare_parameter("min_heading_error_for_motion", 0.35)
+        self.declare_parameter("min_approach_linear_velocity", 0.05)
+        self.declare_parameter("approach_velocity_scaling_dist", 0.6)
+        self.declare_parameter("goal_dist_buf", 0.15)
+        self.declare_parameter("goal_dist_tol", 0.075)
+        self.declare_parameter("linear_acceleration", 0.3)
+        self.declare_parameter("linear_deceleration", 0.6)
+        self.declare_parameter("target_velocity_ema_alpha", 0.2)
         
         self.motion_params = {
             'max_angular_vel': self.get_parameter('max_angular_vel').get_parameter_value().double_value,
@@ -74,32 +93,38 @@ class FollowUserMotionNode(Node):
 
         # Utility classes
         self.motion_utils = MotionUtils(self)
+        self.pure_pursuit_controller = PurePursuitController(self)
 
 
     def robot_pose_callback(self, msg):
         self.robot_pose = msg
 
-    def relative_pose_callback(self, human_relative_pose):
-        if self.goal_handle is None or not self.goal_handle.is_active:
+        if self.goal_handle is None or not self.goal_handle.is_active or self.human_relative_pose is None:
             return
 
         # Handle head tracking
-        self._update_head_tracking(human_relative_pose)
+        self._update_head_tracking(self.human_relative_pose)
 
         # Handle motion control
-        x_rel, y_rel = human_relative_pose.pose.position.x, human_relative_pose.pose.position.y
+        x_rel, y_rel = self.human_relative_pose.pose.position.x, self.human_relative_pose.pose.position.y
         current_distance = math.sqrt(x_rel**2 + y_rel**2)
         following_distance = self.goal_handle.request.following_distance
 
         if current_distance < following_distance:
             self.get_logger().info(f"User is within following distance ({current_distance:.2f}m < {following_distance:.2f}m). Rotating to face user.")
-            self._handle_rotation_to_face_user(human_relative_pose)
+            self._handle_rotation_to_face_user(self.human_relative_pose)
         else:
-            self._handle_path_following(human_relative_pose)
+            self._handle_path_following(self.human_relative_pose)
+            
+
+    def relative_pose_callback(self, msg):
+        self.human_relative_pose = msg
+        if self.goal_handle is None or not self.goal_handle.is_active:
+            return
 
     def _handle_rotation_to_face_user(self, human_relative_pose):
         """Stops path following and rotates the robot to face the user."""
-        # Stop path following by sending an empty path
+        # Publish an empty path to clear the visualization in RViz
         empty_path = Path()
         empty_path.header.stamp = self.get_clock().now().to_msg()
         empty_path.header.frame_id = 'slamware_map'
@@ -116,7 +141,11 @@ class FollowUserMotionNode(Node):
         self.cmd_vel_publisher.publish(twist_msg)
 
     def _handle_path_following(self, human_relative_pose):
-        """Calculates a path to the user and publishes it."""
+        """Calculates a path to the user and uses pure pursuit to generate velocity commands."""
+        if self.robot_pose is None:
+            self.get_logger().warn("Robot pose is not available, skipping path following.")
+            return
+
         try:
             # Create a copy to avoid modifying the original message
             pose_to_transform = deepcopy(human_relative_pose)
@@ -127,15 +156,23 @@ class FollowUserMotionNode(Node):
             human_absolute_pose = self.tf_buffer.transform(pose_to_transform, 'slamware_map', timeout=rclpy.duration.Duration(seconds=1.0))
             target_x = human_absolute_pose.pose.position.x
             target_y = human_absolute_pose.pose.position.y
-            path_points = self.motion_utils.search_path(self.robot_ip, target_x, target_y)
+            path_points = self.motion_utils.search_path(self.robot_ip, target_x, target_y)             
 
             if path_points:
                 path_msg = self.motion_utils.convert_points_to_path(path_points, 'slamware_map')
+                # Publish the path for RViz visualization
                 self.path_publisher.publish(path_msg)
-                self.get_logger().info(f"Published path with {len(path_msg.poses)} points to ({target_x:.2f}, {target_y:.2f})")
+                
+                cmd_vel = self.pure_pursuit_controller.compute_velocity_commands(self.robot_pose, path_msg)
+                self.cmd_vel_publisher.publish(cmd_vel)
+                self.get_logger().info(f"Following path with {len(path_msg.poses)} points. Vel: {cmd_vel.linear.x:.2f}, Ang: {cmd_vel.angular.z:.2f}")
+            else:
+                # TODO: If no path is found, stop the robot
+                self.cmd_vel_publisher.publish(Twist())
 
         except tf2_ros.TransformException as e:
             self.get_logger().error(f'Could not transform pose for path planning: {e}')
+            self.cmd_vel_publisher.publish(Twist())
 
     def _update_head_tracking(self, relative_pose_msg):
         x, y, z = relative_pose_msg.pose.position.x, relative_pose_msg.pose.position.y, relative_pose_msg.pose.position.z
@@ -168,8 +205,9 @@ class FollowUserMotionNode(Node):
             if self.goal_handle.is_cancel_requested:
                 self.goal_handle.canceled()
                 self.get_logger().info('Goal canceled')
-                # Publish an empty path to stop the pure pursuit controller
-                self.path_publisher.publish(Path()) # Publish empty path
+                # Stop the robot and clear the path
+                self.cmd_vel_publisher.publish(Twist())
+                self.path_publisher.publish(Path())
                 self.goal_handle = None
                 return FollowUser.Result(final_status='Goal canceled')
             rclpy.spin_once(self, timeout_sec=0.1)

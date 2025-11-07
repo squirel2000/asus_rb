@@ -23,38 +23,38 @@ find_package(action_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 
-# Add executable targets
-add_executable(pure_pursuit_controller src/pure_pursuit_controller.cpp)
+# # Add executable targets
+# add_executable(pure_pursuit_controller src/pure_pursuit_controller.cpp)
 
-target_include_directories(pure_pursuit_controller PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
-)
+# target_include_directories(pure_pursuit_controller PUBLIC
+#   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+#   $<INSTALL_INTERFACE:include>
+# )
 
-# Specify libraries to link a library or executable target against
-ament_target_dependencies(pure_pursuit_controller
-  rclcpp
-  nav_msgs
-  geometry_msgs
-  tf2
-  tf2_ros
-  tf2_geometry_msgs
-  angles
-)
+# # Specify libraries to link a library or executable target against
+# ament_target_dependencies(pure_pursuit_controller
+#   rclcpp
+#   nav_msgs
+#   geometry_msgs
+#   tf2
+#   tf2_ros
+#   tf2_geometry_msgs
+#   angles
+# )
 
-# Install targets
-install(TARGETS
-  pure_pursuit_controller
-  DESTINATION lib/${PROJECT_NAME}
-)
+# # Install targets
+# install(TARGETS
+#   pure_pursuit_controller
+#   DESTINATION lib/${PROJECT_NAME}
+# )
 
-# Install headers
-install(DIRECTORY include/
-  DESTINATION include
-)
+# # Install headers
+# install(DIRECTORY include/
+#   DESTINATION include
+# )
 
-# Export include directories
-ament_export_include_directories(include)
+# # Export include directories
+# ament_export_include_directories(include)
 
 
 
