@@ -18,7 +18,7 @@ class FollowUserVisionNode(Node):
         self.get_logger().info('Follow User Vision Node has been started.')
 
         # Publisher for the user's relative pose
-        self.relative_pose_publisher = self.create_publisher(PoseStamped, '/human_relative_pose_front_raw', 10)
+        self.human_relative_pose_front_raw_publisher = self.create_publisher(PoseStamped, '/human_relative_pose_front_raw', 10)
 
         # Subscribers
         self.robot_pose_sub = self.create_subscription(PoseStamped, '/robot_pose', self.robot_pose_callback, 10)
@@ -51,23 +51,23 @@ class FollowUserVisionNode(Node):
             
             point_in_base_frame = do_transform_point(msg, transform)
 
-            relative_pose = PoseStamped()
-            relative_pose.header.stamp = self.get_clock().now().to_msg()
-            relative_pose.header.frame_id = 'base_link'
-            relative_pose.pose.position.x = point_in_base_frame.point.x
-            relative_pose.pose.position.y = point_in_base_frame.point.y
-            relative_pose.pose.position.z = point_in_base_frame.point.z
+            human_relative_pose_front_raw = PoseStamped()
+            human_relative_pose_front_raw.header.stamp = self.get_clock().now().to_msg()
+            human_relative_pose_front_raw.header.frame_id = 'base_link'
+            human_relative_pose_front_raw.pose.position.x = point_in_base_frame.point.x
+            human_relative_pose_front_raw.pose.position.y = point_in_base_frame.point.y
+            human_relative_pose_front_raw.pose.position.z = point_in_base_frame.point.z
 
             # Since the clicked point only provides position, we cannot know the user's
             # orientation. We assume a neutral orientation (no rotation) relative to the base_link frame.
             # A quaternion with w=1.0 represents no rotation.
-            relative_pose.pose.orientation.w = 1.0
-            relative_pose.pose.orientation.x = 0.0
-            relative_pose.pose.orientation.y = 0.0
-            relative_pose.pose.orientation.z = 0.0
+            human_relative_pose_front_raw.pose.orientation.w = 1.0
+            human_relative_pose_front_raw.pose.orientation.x = 0.0
+            human_relative_pose_front_raw.pose.orientation.y = 0.0
+            human_relative_pose_front_raw.pose.orientation.z = 0.0
 
-            self.relative_pose_publisher.publish(relative_pose)
-            self.get_logger().info(f"User pose relative to robot: x={relative_pose.pose.position.x:.2f}, y={relative_pose.pose.position.y:.2f}")
+            self.human_relative_pose_front_raw_publisher.publish(human_relative_pose_front_raw)
+            self.get_logger().info(f"User pose relative to robot: x={human_relative_pose_front_raw.pose.position.x:.2f}, y={human_relative_pose_front_raw.pose.position.y:.2f}, dist={math.sqrt(human_relative_pose_front_raw.pose.position.x**2 + human_relative_pose_front_raw.pose.position.y**2):.2f}")
 
         except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
             self.get_logger().error(f'Could not transform point: {e}')

@@ -1,8 +1,13 @@
 import math
 import numpy as np
 from geometry_msgs.msg import Twist, Point
-from nav_msgs.msg import Path
+from nav_msgs.msg import Path, Odometry
 import angles
+
+# Constants
+FOLLOW_DIST_POINTS = 15
+DT = 0.05  # Assuming 20Hz control loop from the motion node
+HEADING_DEADZONE = math.radians(7.5)  # Apply a small dead zone to avoid jitter around zero (±7.5 degrees)
 
 class PurePursuitController:
     def __init__(self, node):
@@ -16,6 +21,7 @@ class PurePursuitController:
         self.max_linear_vel_ = self._node.get_parameter("max_linear_vel").get_parameter_value().double_value
         # max_angular_vel is already declared in the main motion node
         self.max_angular_vel_ = self._node.get_parameter("max_angular_vel").get_parameter_value().double_value
+        self.max_angular_acceleration_ = self._node.get_parameter("max_angular_acceleration").get_parameter_value().double_value
         self.heading_error_for_pure_rotation_ = self._node.get_parameter("heading_error_for_pure_rotation").get_parameter_value().double_value
         self.min_heading_error_for_motion_ = self._node.get_parameter("min_heading_error_for_motion").get_parameter_value().double_value
         self.min_approach_linear_velocity_ = self._node.get_parameter("min_approach_linear_velocity").get_parameter_value().double_value
@@ -24,26 +30,53 @@ class PurePursuitController:
         self.goal_dist_tol_ = self._node.get_parameter("goal_dist_tol").get_parameter_value().double_value
         self.linear_acceleration_ = self._node.get_parameter("linear_acceleration").get_parameter_value().double_value
         self.linear_deceleration_ = self._node.get_parameter("linear_deceleration").get_parameter_value().double_value
-        self.target_velocity_ema_alpha_ = self._node.get_parameter("target_velocity_ema_alpha").get_parameter_value().double_value
 
-        self.commanded_velocity_ = 0.0
         self.target_velocity_ema_ = None
         self.last_path_segment_idx_ = 0
+        self.path_ = None
 
-    def compute_velocity_commands(self, robot_pose, path):
-        cmd_vel = Twist()
-        if not path.poses:
-            return cmd_vel
+    def set_path(self, path):
+        self.path_ = path
+        self.last_path_segment_idx_ = 0
 
-        carrot_pose = self.get_lookahead_point(robot_pose, path)
+    def compute_velocity_commands(self, robot_pose, current_velocity):
+        # High-level dispatcher: choose short-path rotation or full pure-pursuit
+        if self.path_ is None or not self.path_.poses:
+            return self._rectify_velocity(0.0, 0.0, current_velocity)
+
+        if len(self.path_.poses) < FOLLOW_DIST_POINTS:
+            return self._rotate_to_track_user(robot_pose, current_velocity)
+
+        return self._pure_pursuit_control(robot_pose, current_velocity)
+
+    def _rotate_to_track_user(self, robot_pose, current_velocity):
+        """Rotate in place (with deceleration) to face the final path point."""
+        target_pose = self.path_.poses[-1]
+        angle_to_target = math.atan2(
+            target_pose.pose.position.y - robot_pose.pose.position.y,
+            target_pose.pose.position.x - robot_pose.pose.position.x
+        )
+        heading_error = angles.normalize_angle(angle_to_target - self.get_yaw_from_quaternion(robot_pose.pose.orientation))
+        heading_error = 0.0 if abs(heading_error) < HEADING_DEADZONE else heading_error  # Apply deadzone to avoid jitter
+
+        # Proportional control for rotation
+        target_vel_ang_z = heading_error * 1.5  # P-controller gain
+        cmd_vel = self._rectify_velocity(0.0, target_vel_ang_z, current_velocity)
+        
+        # Print debug info
+        self._node.get_logger().info(f"_rotate_to_track_user: Target({target_pose.pose.position.x:.2f}, {target_pose.pose.position.y:.2f}), Robot({robot_pose.pose.position.x:.2f}, {robot_pose.pose.position.y:.2f}, {math.degrees(self.get_yaw_from_quaternion(robot_pose.pose.orientation)):.2f} deg), angle to target: {math.degrees(angle_to_target):.2f} deg,  Heading error: {math.degrees(heading_error):.2f} deg, target_vel_ang_z: {target_vel_ang_z:.2f}, cmd_vel.angular.z: {cmd_vel.angular.z:.2f}")
+        
+        return cmd_vel
+
+    def _pure_pursuit_control(self, robot_pose, current_velocity):
+        """Compute linear and angular commands using the pure pursuit algorithm."""
+        # Calculate the angle to the lookahead point (carrot)
+        carrot_pose = self._get_lookahead_point(robot_pose, self.path_, current_velocity.linear.x)
         if carrot_pose is None:
             self._node.get_logger().warn("Could not find a lookahead point. Stopping.")
-            return cmd_vel
+            return self._rectify_velocity(0.0, 0.0, current_velocity)
 
-        # Get the robot's current yaw
         robot_yaw = self.get_yaw_from_quaternion(robot_pose.pose.orientation)
-
-        # Calculate the angle to the lookahead point (carrot)
         angle_to_carrot_global = math.atan2(
             carrot_pose.pose.position.y - robot_pose.pose.position.y,
             carrot_pose.pose.position.x - robot_pose.pose.position.x)
@@ -61,8 +94,8 @@ class PurePursuitController:
 
         # Determine the target velocity based on distance to goal
         dist_to_goal = math.hypot(
-            robot_pose.pose.position.x - path.poses[-1].pose.position.x,
-            robot_pose.pose.position.y - path.poses[-1].pose.position.y)
+            robot_pose.pose.position.x - self.path_.poses[-1].pose.position.x,
+            robot_pose.pose.position.y - self.path_.poses[-1].pose.position.y)
 
         if dist_to_goal > self.approach_velocity_scaling_dist_:
             goal_approach_target_vel = self.desired_linear_vel_
@@ -80,57 +113,60 @@ class PurePursuitController:
             range_ = self.goal_dist_tol_
             scale = dist_to_goal / max(range_, 1e-4)
             goal_approach_target_vel = scale * final_crawl_vel
-        
-        goal_approach_target_vel = np.clip(goal_approach_target_vel, 0.0, self.desired_linear_vel_)
-        final_target_velocity = goal_approach_target_vel * speed_scale
-        linear_vel = self.calculate_speed(final_target_velocity)
 
+        goal_approach_target_vel = np.clip(goal_approach_target_vel, 0.0, self.desired_linear_vel_)
+        target_vel_lin_x = goal_approach_target_vel * speed_scale
+        
         # Pure pursuit logic for angular velocity
-        angle_to_carrot_robot_frame = heading_error # Simplified for this context
-        
         pure_rotation_w = np.sign(heading_error) * 0.7 * self.max_angular_vel_
-        
         lookahead_dist_for_curve = math.hypot(carrot_pose.pose.position.x - robot_pose.pose.position.x,
                                               carrot_pose.pose.position.y - robot_pose.pose.position.y)
         lookahead_dist_for_curve = max(lookahead_dist_for_curve, 0.01)
-        
-        pure_pursuit_curvature = 2.0 * math.sin(angle_to_carrot_robot_frame) / lookahead_dist_for_curve
-        pure_pursuit_w = linear_vel * pure_pursuit_curvature
-        
-        cmd_vel.angular.z = (1.0 - speed_scale) * pure_rotation_w + speed_scale * pure_pursuit_w
-        cmd_vel.linear.x = linear_vel
-        cmd_vel.angular.z = np.clip(cmd_vel.angular.z, -self.max_angular_vel_, self.max_angular_vel_)
 
+        pure_pursuit_curvature = 2.0 * math.sin(heading_error) / lookahead_dist_for_curve
+        pure_pursuit_w = target_vel_lin_x * pure_pursuit_curvature
+        target_vel_ang_z = (1.0 - speed_scale) * pure_rotation_w + speed_scale * pure_pursuit_w
+        
+        cmd_vel = self._rectify_velocity(target_vel_lin_x, target_vel_ang_z, current_velocity)
+        
+        # Print debug info
+        self._node.get_logger().info(f"_pure_pursuit_control: carrot_pose({carrot_pose.pose.position.x:.2f}, {carrot_pose.pose.position.y:.2f}), Robot({robot_pose.pose.position.x:.2f}, {robot_pose.pose.position.y:.2f}, {math.degrees(self.get_yaw_from_quaternion(robot_pose.pose.orientation)):.2f} deg), Heading error: {math.degrees(heading_error):.2f} deg, target_vel({target_vel_lin_x:.2f}, {target_vel_ang_z:.2f}), cmd_vel({cmd_vel.linear.x:.2f}, {cmd_vel.angular.z:.2f})")
+        
         return cmd_vel
 
-    def calculate_speed(self, target_velocity):
-        if self.target_velocity_ema_ is None:
-            self.target_velocity_ema_ = target_velocity
-        else:
-            self.target_velocity_ema_ = self.target_velocity_ema_ * (1.0 - self.target_velocity_ema_alpha_) + target_velocity * self.target_velocity_ema_alpha_
 
-        velocity_error = self.target_velocity_ema_ - self.commanded_velocity_
-        dt = 0.05 # Assuming 20Hz control loop from the motion node
+    def _rectify_velocity(self, target_vel_lin_x, target_vel_ang_z, current_velocity):
+        """Refine velocity commands based on acceleration/deceleration limits.
+        """
+        cmd_vel = Twist()
+
+        vel_lin_x_error = target_vel_lin_x - current_velocity.linear.x
+        if vel_lin_x_error > 0:
+            stepped_vel_lin_x = min(target_vel_lin_x, current_velocity.linear.x + abs(self.linear_acceleration_) * DT)
+        else:
+            stepped_vel_lin_x = max(target_vel_lin_x, current_velocity.linear.x - abs(self.linear_deceleration_) * DT)
+        cmd_vel.linear.x = np.clip(stepped_vel_lin_x, 0.0, self.max_linear_vel_)
+
+        vel_ang_z_error = target_vel_ang_z - current_velocity.angular.z
+        if vel_ang_z_error > 0:
+            stepped_vel_ang_z = min(target_vel_ang_z, current_velocity.angular.z + abs(self.max_angular_acceleration_) * DT)
+        else:
+            stepped_vel_ang_z = max(target_vel_ang_z, current_velocity.angular.z - abs(self.max_angular_acceleration_) * DT)
+        cmd_vel.angular.z = np.clip(stepped_vel_ang_z, -self.max_angular_vel_, self.max_angular_vel_)
         
-        if velocity_error > 0:
-            new_velocity = min(self.target_velocity_ema_, self.commanded_velocity_ + abs(self.linear_acceleration_) * dt)
-        else:
-            new_velocity = max(self.target_velocity_ema_, self.commanded_velocity_ - abs(self.linear_deceleration_) * dt)
-            
-        self.commanded_velocity_ = np.clip(new_velocity, 0.0, self.max_linear_vel_)
-        return self.commanded_velocity_
+        return cmd_vel
 
-    def get_lookahead_point(self, robot_pose, path):
-        vel_for_lookahead = self.commanded_velocity_
+    def _get_lookahead_point(self, robot_pose, path, current_velocity):
+        vel_for_lookahead = current_velocity
         lookahead_dist = np.clip(self.lookahead_time_ * vel_for_lookahead, self.min_lookahead_dist_, self.max_lookahead_dist_)
         
-        closest_segment_idx = self.find_closest_path_segment(robot_pose, path, self.last_path_segment_idx_)
+        closest_segment_idx = self._find_closest_path_segment(robot_pose, path, self.last_path_segment_idx_)
         self.last_path_segment_idx_ = closest_segment_idx
 
         for i in range(closest_segment_idx, len(path.poses) - 1):
             p1 = path.poses[i].pose.position
             p2 = path.poses[i+1].pose.position
-            intersection = self.find_intersection(p1, p2, robot_pose.pose.position, lookahead_dist)
+            intersection = self._find_intersection(p1, p2, robot_pose.pose.position, lookahead_dist)
 
             if intersection:
                 lookahead_point = Point()
@@ -147,10 +183,10 @@ class PurePursuitController:
             robot_pose.pose.position.y - path.poses[-1].pose.position.y)
         if dist_to_last_point <= lookahead_dist + self.goal_dist_tol_:
             return path.poses[-1]
-            
+        
         return None
 
-    def find_closest_path_segment(self, robot_pose, path, start_idx):
+    def _find_closest_path_segment(self, robot_pose, path, start_idx):
         min_dist_sq = float('inf')
         closest_idx = start_idx
 
@@ -164,7 +200,7 @@ class PurePursuitController:
         
         return max(0, closest_idx - 1)
 
-    def find_intersection(self, p1, p2, robot_pos, L):
+    def _find_intersection(self, p1, p2, robot_pos, L):
         dx = p2.x - p1.x
         dy = p2.y - p1.y
         d_sq = dx*dx + dy*dy

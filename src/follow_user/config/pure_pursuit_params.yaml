@@ -8,8 +8,9 @@ pure_pursuit_controller:
 
     # Velocity Parameters
     desired_linear_vel: 0.50                 # Desired linear velocity. Should not exceed max_linear_vel.
-    max_linear_vel: 0.70                     # MODIFIED: Safety limit for max linear speed.
+    max_linear_vel: 0.70                     # Safety limit for max linear speed.
     max_angular_vel: 1.2                     # Maximum angular velocity
+    max_angular_acceleration: 1.0            # Maximum angular acceleration (rad/s^2)
     min_approach_linear_velocity: 0.05       # Minimum velocity when approaching the goal.
     approach_velocity_scaling_dist: 1.0      # Distance at which to start scaling down velocity when approaching the goal.
     
@@ -26,7 +27,7 @@ pure_pursuit_controller:
 
     # Topics and Frames
     path_topic: "/follow_user/planned_path"
-    odom_topic: "/slamware_ros_sdk_server_node/odom" # MODIFIED: Added odom topic
+    odom_topic: "/slamware_ros_sdk_server_node/odom"
     cmd_vel_topic: "/cmd_vel"
     base_frame: "base_link"
     global_frame: "slamware_map"
