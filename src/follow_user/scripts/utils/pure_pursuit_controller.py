@@ -1,6 +1,6 @@
 import math
 import numpy as np
-from geometry_msgs.msg import Twist, Point
+from geometry_msgs.msg import Twist, Point, PoseStamped
 from nav_msgs.msg import Path, Odometry
 import angles
 
@@ -173,8 +173,10 @@ class PurePursuitController:
                 lookahead_point.x = intersection[0]
                 lookahead_point.y = intersection[1]
                 
-                carrot_pose = robot_pose
+                carrot_pose = PoseStamped()
+                carrot_pose.header = robot_pose.header
                 carrot_pose.pose.position = lookahead_point
+                carrot_pose.pose.orientation = robot_pose.pose.orientation
                 return carrot_pose
 
         # If no intersection, use the last point if it's close enough
