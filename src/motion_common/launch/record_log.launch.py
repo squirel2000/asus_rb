@@ -33,12 +33,10 @@ def launch_setup(context, *args, **kwargs):
                                            ]
     follow_user_topics = base_topics + ["/cmd_vel",
                                         "/clicked_point",
+                                        "/human_relative_pose_front",
+                                        "/follow_user/human_absolute_pose",
                                         "/follow_user/planned_path",
                                         "/lookahead_point",
-                                        "/follow_user/odom_dt",
-                                        "/follow_user/target_velocity",
-                                        "/follow_user/current_velocity",
-                                        "/follow_user/speed_scale",
                                         ]
 
     navigation_cmd = ["ros2", "bag", "record", *navigation_topics, "-o", bag_path]

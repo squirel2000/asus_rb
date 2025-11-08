@@ -44,8 +44,8 @@ class FollowUserMotionNode(Node):
         self.odom_sub = self.create_subscription(Odometry, '/slamware_ros_sdk_server_node/odom', self.odom_callback, 10)
                 
         # Publishers
-        self.path_publisher = self.create_publisher(Path, '/follow_user/planned_path', 10)
         self.cmd_vel_publisher = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.path_publisher = self.create_publisher(Path, '/follow_user/planned_path', 10)
         self.human_absolute_pose_publisher = self.create_publisher(PoseStamped, '/follow_user/human_absolute_pose', 10)
 
         # TF

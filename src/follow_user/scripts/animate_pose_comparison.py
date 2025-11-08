@@ -20,11 +20,11 @@ def quaternion_to_yaw(q):
 def load_data(bag_path):
     typestore = get_typestore(Stores.ROS2_HUMBLE)
     odom_data = {'t': [], 'x': [], 'y': [], 'yaw': []}
+    odom_vel_data = {'t': [], 'x': [], 'y': [], 'yaw': []}
     pose_data = {'t': [], 'x': [], 'y': [], 'yaw': []}
+    human_pose_data = {'t': [], 'x': [], 'y': [], 'yaw': []}
     lookahead_data = {'t': [], 'x': [], 'y': []}
     path_data = {'t': [], 'paths': []}
-    target_velocity_data = {'t': [], 'v': []}
-    current_velocity_data = {'t': [], 'v': []}
     cmd_vel_data = {'t': [], 'x': [], 'y': [], 'yaw': []}
 
     print(f"Reading bag: {bag_path}")
@@ -38,15 +38,24 @@ def load_data(bag_path):
                 odom_data['x'].append(msg.pose.pose.position.x)
                 odom_data['y'].append(msg.pose.pose.position.y)
                 odom_data['yaw'].append(quaternion_to_yaw(msg.pose.pose.orientation))
+                odom_vel_data['t'].append(t)
+                odom_vel_data['x'].append(msg.twist.twist.linear.x)
+                odom_vel_data['y'].append(msg.twist.twist.linear.y)
+                odom_vel_data['yaw'].append(msg.twist.twist.angular.z)
             elif connection.topic == '/robot_pose':
                 pose_data['t'].append(t)
                 pose_data['x'].append(msg.pose.position.x)
                 pose_data['y'].append(msg.pose.position.y)
                 pose_data['yaw'].append(quaternion_to_yaw(msg.pose.orientation))
+            elif connection.topic == '/follow_user/human_absolute_pose':
+                human_pose_data['t'].append(t)
+                human_pose_data['x'].append(msg.pose.position.x)
+                human_pose_data['y'].append(msg.pose.position.y)
+                human_pose_data['yaw'].append(quaternion_to_yaw(msg.pose.orientation))
             elif connection.topic == '/lookahead_point':
                 lookahead_data['t'].append(t)
-                lookahead_data['x'].append(msg.pose.position.x)
-                lookahead_data['y'].append(msg.pose.position.y)
+                lookahead_data['x'].append(msg.x)
+                lookahead_data['y'].append(msg.y)
             elif connection.topic == '/follow_user/planned_path':
                 path_data['t'].append(t)
                 path = {'x': [], 'y': []}
@@ -54,30 +63,37 @@ def load_data(bag_path):
                     path['x'].append(pose_stamped.pose.position.x)
                     path['y'].append(pose_stamped.pose.position.y)
                 path_data['paths'].append(path)
-            elif connection.topic == '/follow_user/target_velocity':
-                target_velocity_data['t'].append(t)
-                target_velocity_data['v'].append(msg.data)
-            elif connection.topic == '/follow_user/current_velocity':
-                current_velocity_data['t'].append(t)
-                current_velocity_data['v'].append(msg.data)
             elif connection.topic == '/cmd_vel':
                 cmd_vel_data['t'].append(t)
                 cmd_vel_data['x'].append(msg.linear.x)
                 cmd_vel_data['y'].append(msg.linear.y)
                 cmd_vel_data['yaw'].append(msg.angular.z)
 
-    return odom_data, pose_data, lookahead_data, path_data, target_velocity_data, current_velocity_data, cmd_vel_data
+    return odom_data, odom_vel_data, pose_data, human_pose_data, lookahead_data, path_data, cmd_vel_data
 
-def animate_plots(odom, pose, lookahead, path, target_velocity, current_velocity, cmd_vel):
+def filter_data_since(data_dict, start_time):
+    """Filters dictionary of lists to start from a given time."""
+    if not data_dict.get('t'):
+        return data_dict
+    
+    start_idx = np.searchsorted(data_dict['t'], start_time, side='left')
+    
+    filtered_dict = {}
+    for key, values in data_dict.items():
+        filtered_dict[key] = values[start_idx:]
+        
+    return filtered_dict
+
+def animate_plots(odom, odom_vel, pose, human_pose, lookahead, path, cmd_vel):
     fig, axs = plt.subplots(2, 2, figsize=(10, 10))
     ax1, ax2, ax3, ax4 = axs.flatten()
 
     # Subplot 1: Pose Animation
-    ax1.set_title('Odom vs Robot Pose')
+    ax1.set_title('Pose Animation')
     ax1.set_xlabel('X (m)')
     ax1.set_ylabel('Y (m)')
-    all_x = odom['x'] + pose['x'] + lookahead['x']
-    all_y = odom['y'] + pose['y'] + lookahead['y']
+    all_x = odom['x'] + pose['x'] + human_pose['x'] + lookahead['x']
+    all_y = odom['y'] + pose['y'] + human_pose['y'] + lookahead['y']
     for p in path['paths']:
         all_x.extend(p['x'])
         all_y.extend(p['y'])
@@ -88,8 +104,9 @@ def animate_plots(odom, pose, lookahead, path, target_velocity, current_velocity
         ax1.set_xlim(min_x - 1.0, max_x + 1.0)
         ax1.set_ylim(min_y - 1.0, max_y + 1.0)
     ax1.grid(True)
-    odom_trace, = ax1.plot([], [], 'g.-', lw=1.5, label='Odom')
-    pose_trace, = ax1.plot([], [], 'b.-', lw=1.5, label='Robot Pose')
+    odom_point, = ax1.plot([], [], 'go', markersize=5, label='Odom')
+    pose_point, = ax1.plot([], [], 'bo', markersize=5, label='Robot Pose')
+    human_pose_point, = ax1.plot([], [], 'mo', markersize=5, label='Human Pose')
     path_trace, = ax1.plot([], [], 'y--', lw=1.5, label='Planned Path')
     lookahead_point, = ax1.plot([], [], 'ro', markersize=8, label='Lookahead Point')
     ax1.legend()
@@ -99,9 +116,8 @@ def animate_plots(odom, pose, lookahead, path, target_velocity, current_velocity
     ax2.set_xlabel('Time (s)')
     ax2.set_ylabel('Velocity (m/s)')
     ax2.grid(True)
-    target_v_line, = ax2.plot([], [], 'r-', label='Target Velocity')
-    current_v_line, = ax2.plot([], [], 'b-', label='Current Velocity')
     cmd_vel_x_line, = ax2.plot([], [], 'g-', label='Cmd Vel X')
+    odom_x_line, = ax2.plot([], [], 'b-', label='Odom Vel X')
     ax2.legend()
 
     # Subplot 3: Y-axis Velocity
@@ -110,9 +126,7 @@ def animate_plots(odom, pose, lookahead, path, target_velocity, current_velocity
     ax3.set_ylabel('Velocity (m/s)')
     ax3.grid(True)
     cmd_vel_y_line, = ax3.plot([], [], 'g-', label='Cmd Vel Y')
-    # Also show target and current velocity on Y-axis for comparison
-    target_v_line_y, = ax3.plot([], [], 'r-', label='Target Velocity')
-    current_v_line_y, = ax3.plot([], [], 'b-', label='Current Velocity')
+    odom_y_line, = ax3.plot([], [], 'b-', label='Odom Vel Y')
     ax3.legend()
 
     # Subplot 4: Yaw Velocity
@@ -121,41 +135,37 @@ def animate_plots(odom, pose, lookahead, path, target_velocity, current_velocity
     ax4.set_ylabel('Velocity (rad/s)')
     ax4.grid(True)
     cmd_vel_yaw_line, = ax4.plot([], [], 'g-', label='Cmd Vel Yaw')
-    # Also show target and current velocity on Yaw for comparison
-    target_v_line_yaw, = ax4.plot([], [], 'r-', label='Target Velocity')
-    current_v_line_yaw, = ax4.plot([], [], 'b-', label='Current Velocity')
+    odom_yaw_line, = ax4.plot([], [], 'b-', label='Odom Vel Yaw')
     ax4.legend()
 
     def init():
         # Init for Subplot 1
-        odom_trace.set_data([], [])
-        pose_trace.set_data([], [])
+        odom_point.set_data([], [])
+        pose_point.set_data([], [])
+        human_pose_point.set_data([], [])
         path_trace.set_data([], [])
         lookahead_point.set_data([], [])
         # Init for Subplot 2
-        target_v_line.set_data([], [])
-        current_v_line.set_data([], [])
         cmd_vel_x_line.set_data([], [])
+        odom_x_line.set_data([], [])
         # Init for Subplot 3
         cmd_vel_y_line.set_data([], [])
-        target_v_line_y.set_data([], [])
-        current_v_line_y.set_data([], [])
+        odom_y_line.set_data([], [])
         # Init for Subplot 4
         cmd_vel_yaw_line.set_data([], [])
-        target_v_line_yaw.set_data([], [])
-        current_v_line_yaw.set_data([], [])
-        return (odom_trace, pose_trace, path_trace, lookahead_point,
-            target_v_line, current_v_line, cmd_vel_x_line,
-            cmd_vel_y_line, target_v_line_y, current_v_line_y,
-            cmd_vel_yaw_line, target_v_line_yaw, current_v_line_yaw)
+        odom_yaw_line.set_data([], [])
+        return (odom_point, pose_point, human_pose_point, path_trace, lookahead_point,
+            cmd_vel_x_line, odom_x_line,
+            cmd_vel_y_line, odom_y_line,
+            cmd_vel_yaw_line, odom_yaw_line)
 
     def update(i):
         current_time = odom['t'][i]
 
         # Update Subplot 1
         ax1.patches.clear()  # Clear previous arrows
-        odom_trace.set_data(odom['x'][:i+1], odom['y'][:i+1])
-        pose_trace.set_data(pose['x'][:i+1], pose['y'][:i+1])
+        odom_point.set_data(odom['x'][i], odom['y'][i])
+        pose_point.set_data(pose['x'][i], pose['y'][i])
 
         # Add odom arrow
         ox, oy, oyaw = odom['x'][i], odom['y'][i], odom['yaw'][i]
@@ -165,6 +175,13 @@ def animate_plots(odom, pose, lookahead, path, target_velocity, current_velocity
         px, py, pyaw = pose['x'][i], pose['y'][i], pose['yaw'][i]
         ax1.arrow(px, py, 0.1*math.cos(pyaw), 0.1*math.sin(pyaw), head_width=0.02, fc='b', ec='b')
 
+        # Add human pose arrow
+        human_pose_idx = np.searchsorted(human_pose['t'], current_time, side='right') - 1
+        if human_pose_idx >= 0:
+            human_pose_point.set_data(human_pose['x'][human_pose_idx], human_pose['y'][human_pose_idx])
+            hx, hy, hyaw = human_pose['x'][human_pose_idx], human_pose['y'][human_pose_idx], human_pose['yaw'][human_pose_idx]
+            ax1.arrow(hx, hy, 0.1*math.cos(hyaw), 0.1*math.sin(hyaw), head_width=0.02, fc='m', ec='m')
+
         lookahead_idx = np.searchsorted(lookahead['t'], current_time, side='right') - 1
         if lookahead_idx >= 0:
             lookahead_point.set_data(lookahead['x'][lookahead_idx], lookahead['y'][lookahead_idx])
@@ -173,33 +190,29 @@ def animate_plots(odom, pose, lookahead, path, target_velocity, current_velocity
             path_trace.set_data(path['paths'][path_idx]['x'], path['paths'][path_idx]['y'])
 
         # Update Subplot 2
-        target_v_idx = np.searchsorted(target_velocity['t'], current_time, side='right')
-        current_v_idx = np.searchsorted(current_velocity['t'], current_time, side='right')
         cmd_vel_idx = np.searchsorted(cmd_vel['t'], current_time, side='right')
-        target_v_line.set_data(target_velocity['t'][:target_v_idx], target_velocity['v'][:target_v_idx])
-        current_v_line.set_data(current_velocity['t'][:current_v_idx], current_velocity['v'][:current_v_idx])
+        odom_vel_idx = np.searchsorted(odom_vel['t'], current_time, side='right')
         cmd_vel_x_line.set_data(cmd_vel['t'][:cmd_vel_idx], cmd_vel['x'][:cmd_vel_idx])
+        odom_x_line.set_data(odom_vel['t'][:odom_vel_idx], odom_vel['x'][:odom_vel_idx])
         ax2.relim()
         ax2.autoscale_view()
 
         # Update Subplot 3 (Y-axis)
         cmd_vel_y_line.set_data(cmd_vel['t'][:cmd_vel_idx], cmd_vel['y'][:cmd_vel_idx])
-        target_v_line_y.set_data(target_velocity['t'][:target_v_idx], target_velocity['v'][:target_v_idx])
-        current_v_line_y.set_data(current_velocity['t'][:current_v_idx], current_velocity['v'][:current_v_idx])
+        odom_y_line.set_data(odom_vel['t'][:odom_vel_idx], odom_vel['y'][:odom_vel_idx])
         ax3.relim()
         ax3.autoscale_view()
 
         # Update Subplot 4 (Yaw)
         cmd_vel_yaw_line.set_data(cmd_vel['t'][:cmd_vel_idx], cmd_vel['yaw'][:cmd_vel_idx])
-        target_v_line_yaw.set_data(target_velocity['t'][:target_v_idx], target_velocity['v'][:target_v_idx])
-        current_v_line_yaw.set_data(current_velocity['t'][:current_v_idx], current_velocity['v'][:current_v_idx])
+        odom_yaw_line.set_data(odom_vel['t'][:odom_vel_idx], odom_vel['yaw'][:odom_vel_idx])
         ax4.relim()
         ax4.autoscale_view()
 
-        return (odom_trace, pose_trace, path_trace, lookahead_point,
-            target_v_line, current_v_line, cmd_vel_x_line,
-            cmd_vel_y_line, target_v_line_y, current_v_line_y,
-            cmd_vel_yaw_line, target_v_line_yaw, current_v_line_yaw)
+        return (odom_point, pose_point, human_pose_point, path_trace, lookahead_point,
+            cmd_vel_x_line, odom_x_line,
+            cmd_vel_y_line, odom_y_line,
+            cmd_vel_yaw_line, odom_yaw_line)
 
     num_frames = min(len(odom['t']), len(pose['t']))
     ani = FuncAnimation(fig, update, frames=num_frames, init_func=init,
@@ -212,11 +225,21 @@ if __name__ == '__main__':
     parser.add_argument('bag_path', type=str, help='Path to the rosbag2 directory')
     args = parser.parse_args()
 
-    (odom_data, pose_data, lookahead_data, path_data,
-     target_velocity_data, current_velocity_data, cmd_vel_data) = load_data(args.bag_path)
+    (odom_data, odom_vel_data, pose_data, human_pose_data, lookahead_data, path_data,
+     cmd_vel_data) = load_data(args.bag_path)
+
+    if cmd_vel_data['t']:
+        start_time = cmd_vel_data['t'][0]
+        odom_data = filter_data_since(odom_data, start_time)
+        odom_vel_data = filter_data_since(odom_vel_data, start_time)
+        pose_data = filter_data_since(pose_data, start_time)
+        human_pose_data = filter_data_since(human_pose_data, start_time)
+        lookahead_data = filter_data_since(lookahead_data, start_time)
+        path_data = filter_data_since(path_data, start_time)
+        cmd_vel_data = filter_data_since(cmd_vel_data, start_time)
 
     if not odom_data['t'] or not pose_data['t']:
         print("Error: missing /odom or /robot_pose data.")
     else:
-        animate_plots(odom_data, pose_data, lookahead_data, path_data,
-                      target_velocity_data, current_velocity_data, cmd_vel_data)
+        animate_plots(odom_data, odom_vel_data, pose_data, human_pose_data, lookahead_data, path_data,
+                      cmd_vel_data)

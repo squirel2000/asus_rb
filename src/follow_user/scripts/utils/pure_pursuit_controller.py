@@ -1,6 +1,6 @@
 import math
 import numpy as np
-from geometry_msgs.msg import Twist, Point, PoseStamped
+from geometry_msgs.msg import Twist, Point
 from nav_msgs.msg import Path, Odometry
 import angles
 
@@ -31,6 +31,8 @@ class PurePursuitController:
         self.linear_acceleration_ = self._node.get_parameter("linear_acceleration").get_parameter_value().double_value
         self.linear_deceleration_ = self._node.get_parameter("linear_deceleration").get_parameter_value().double_value
 
+        self.lookahead_point_pub_ = self._node.create_publisher(Point, 'lookahead_point', 10)
+        self._node.get_logger().info('Publishing lookahead point on topic "lookahead_point"')
         self.target_velocity_ema_ = None
         self.last_path_segment_idx_ = 0
         self.path_ = None
@@ -71,15 +73,16 @@ class PurePursuitController:
     def _pure_pursuit_control(self, robot_pose, current_velocity):
         """Compute linear and angular commands using the pure pursuit algorithm."""
         # Calculate the angle to the lookahead point (carrot)
-        carrot_pose = self._get_lookahead_point(robot_pose, self.path_, current_velocity.linear.x)
-        if carrot_pose is None:
+        lookahead_point = self._get_lookahead_point(robot_pose, self.path_, current_velocity.linear.x)
+        if lookahead_point is None:
             self._node.get_logger().warn("Could not find a lookahead point. Stopping.")
             return self._rectify_velocity(0.0, 0.0, current_velocity)
 
+        self.lookahead_point_pub_.publish(lookahead_point)
         robot_yaw = self.get_yaw_from_quaternion(robot_pose.pose.orientation)
         angle_to_carrot_global = math.atan2(
-            carrot_pose.pose.position.y - robot_pose.pose.position.y,
-            carrot_pose.pose.position.x - robot_pose.pose.position.x)
+            lookahead_point.y - robot_pose.pose.position.y,
+            lookahead_point.x - robot_pose.pose.position.x)
 
         # Calculate the heading error
         heading_error = angles.normalize_angle(angle_to_carrot_global - robot_yaw)
@@ -119,8 +122,8 @@ class PurePursuitController:
         
         # Pure pursuit logic for angular velocity
         pure_rotation_w = np.sign(heading_error) * 0.7 * self.max_angular_vel_
-        lookahead_dist_for_curve = math.hypot(carrot_pose.pose.position.x - robot_pose.pose.position.x,
-                                              carrot_pose.pose.position.y - robot_pose.pose.position.y)
+        lookahead_dist_for_curve = math.hypot(lookahead_point.x - robot_pose.pose.position.x,
+                                              lookahead_point.y - robot_pose.pose.position.y)
         lookahead_dist_for_curve = max(lookahead_dist_for_curve, 0.01)
 
         pure_pursuit_curvature = 2.0 * math.sin(heading_error) / lookahead_dist_for_curve
@@ -130,7 +133,7 @@ class PurePursuitController:
         cmd_vel = self._rectify_velocity(target_vel_lin_x, target_vel_ang_z, current_velocity)
         
         # Print debug info
-        self._node.get_logger().info(f"_pure_pursuit_control: carrot_pose({carrot_pose.pose.position.x:.2f}, {carrot_pose.pose.position.y:.2f}), Robot({robot_pose.pose.position.x:.2f}, {robot_pose.pose.position.y:.2f}, {math.degrees(self.get_yaw_from_quaternion(robot_pose.pose.orientation)):.2f} deg), Heading error: {math.degrees(heading_error):.2f} deg, target_vel({target_vel_lin_x:.2f}, {target_vel_ang_z:.2f}), cmd_vel({cmd_vel.linear.x:.2f}, {cmd_vel.angular.z:.2f})")
+        self._node.get_logger().info(f"_pure_pursuit_control: lookahead_point({lookahead_point.x:.2f}, {lookahead_point.y:.2f}), Robot({robot_pose.pose.position.x:.2f}, {robot_pose.pose.position.y:.2f}, {math.degrees(self.get_yaw_from_quaternion(robot_pose.pose.orientation)):.2f} deg), Heading error: {math.degrees(heading_error):.2f} deg, target_vel({target_vel_lin_x:.2f}, {target_vel_ang_z:.2f}), cmd_vel({cmd_vel.linear.x:.2f}, {cmd_vel.angular.z:.2f})")
         
         return cmd_vel
 
@@ -172,19 +175,14 @@ class PurePursuitController:
                 lookahead_point = Point()
                 lookahead_point.x = intersection[0]
                 lookahead_point.y = intersection[1]
-                
-                carrot_pose = PoseStamped()
-                carrot_pose.header = robot_pose.header
-                carrot_pose.pose.position = lookahead_point
-                carrot_pose.pose.orientation = robot_pose.pose.orientation
-                return carrot_pose
+                return lookahead_point
 
         # If no intersection, use the last point if it's close enough
         dist_to_last_point = math.hypot(
             robot_pose.pose.position.x - path.poses[-1].pose.position.x,
             robot_pose.pose.position.y - path.poses[-1].pose.position.y)
         if dist_to_last_point <= lookahead_dist + self.goal_dist_tol_:
-            return path.poses[-1]
+            return path.poses[-1].pose.position
         
         return None
 
