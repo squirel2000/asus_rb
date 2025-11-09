@@ -10,42 +10,6 @@ class MotionUtils:
         self.last_angular_vel = 0.0
         self.last_time = self._node.get_clock().now()
 
-    def calculate_smooth_angular_velocity(self, angle_to_user, params):
-        """
-        Calculates a smooth, rate-limited angular velocity to face the user.
-        """
-        # 1. Implement deadband to prevent jitter
-        if abs(angle_to_user) < math.radians(5.0):  # +/- 5 degrees
-            target_angular_vel = 0.0
-        else:
-            # Simple proportional controller for target velocity
-            target_angular_vel = 0.8 * angle_to_user
-
-        # 2. Apply acceleration and velocity limits
-        current_time = self._node.get_clock().now()
-        dt = (current_time - self.last_time).nanoseconds / 1e9
-        self.last_time = current_time
-
-        # Calculate the change in velocity based on acceleration limits
-        max_vel_change = params['angular_acceleration'] * dt
-        min_vel_change = -params['angular_deceleration'] * dt
-
-        # Smoothly ramp the velocity
-        if target_angular_vel > self.last_angular_vel:
-            new_angular_vel = self.last_angular_vel + max_vel_change
-            if new_angular_vel > target_angular_vel:
-                new_angular_vel = target_angular_vel
-        else:
-            new_angular_vel = self.last_angular_vel + min_vel_change
-            if new_angular_vel < target_angular_vel:
-                new_angular_vel = target_angular_vel
-        
-        # Clamp to the absolute maximum velocity
-        final_angular_vel = np.clip(new_angular_vel, -params['max_angular_vel'], params['max_angular_vel'])
-        self.last_angular_vel = final_angular_vel
-        
-        return final_angular_vel
-
     def search_path(self, robot_ip, x, y, timeout=100):
         """
         Calls the external API to find a path to the target coordinates.

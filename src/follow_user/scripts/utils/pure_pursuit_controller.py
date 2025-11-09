@@ -1,25 +1,23 @@
 import math
 import numpy as np
 from geometry_msgs.msg import Twist, Point
-from nav_msgs.msg import Path, Odometry
 import angles
 
 # Constants
 FOLLOW_DIST_POINTS = 15
 DT = 0.05  # Assuming 20Hz control loop from the motion node
-HEADING_DEADZONE = math.radians(7.5)  # Apply a small dead zone to avoid jitter around zero (±7.5 degrees)
+HEADING_DEADZONE = math.radians(5.0)  # Apply a small dead zone to avoid jitter around zero (±5.0 degrees)
 
 class PurePursuitController:
     def __init__(self, node):
         self._node = node
         # Parameters are declared in the main node and loaded from yaml
-        self.lookahead_dist_ = self._node.get_parameter("lookahead_dist").get_parameter_value().double_value
         self.min_lookahead_dist_ = self._node.get_parameter("min_lookahead_dist").get_parameter_value().double_value
         self.max_lookahead_dist_ = self._node.get_parameter("max_lookahead_dist").get_parameter_value().double_value
         self.lookahead_time_ = self._node.get_parameter("lookahead_time").get_parameter_value().double_value
-        self.desired_linear_vel_ = self._node.get_parameter("desired_linear_vel").get_parameter_value().double_value
         self.max_linear_vel_ = self._node.get_parameter("max_linear_vel").get_parameter_value().double_value
-        # max_angular_vel is already declared in the main motion node
+        self.linear_acceleration_ = self._node.get_parameter("linear_acceleration").get_parameter_value().double_value
+        self.linear_deceleration_ = self._node.get_parameter("linear_deceleration").get_parameter_value().double_value
         self.max_angular_vel_ = self._node.get_parameter("max_angular_vel").get_parameter_value().double_value
         self.max_angular_acceleration_ = self._node.get_parameter("max_angular_acceleration").get_parameter_value().double_value
         self.heading_error_for_pure_rotation_ = self._node.get_parameter("heading_error_for_pure_rotation").get_parameter_value().double_value
@@ -27,13 +25,10 @@ class PurePursuitController:
         self.min_approach_linear_velocity_ = self._node.get_parameter("min_approach_linear_velocity").get_parameter_value().double_value
         self.approach_velocity_scaling_dist_ = self._node.get_parameter("approach_velocity_scaling_dist").get_parameter_value().double_value
         self.goal_dist_buf_ = self._node.get_parameter("goal_dist_buf").get_parameter_value().double_value
-        self.goal_dist_tol_ = self._node.get_parameter("goal_dist_tol").get_parameter_value().double_value
-        self.linear_acceleration_ = self._node.get_parameter("linear_acceleration").get_parameter_value().double_value
-        self.linear_deceleration_ = self._node.get_parameter("linear_deceleration").get_parameter_value().double_value
+        self.goal_dist_tol_ = self._node.get_parameter("goal_dist_tol").get_parameter_value().double_value        
 
         self.lookahead_point_pub_ = self._node.create_publisher(Point, 'lookahead_point', 10)
         self._node.get_logger().info('Publishing lookahead point on topic "lookahead_point"')
-        self.target_velocity_ema_ = None
         self.last_path_segment_idx_ = 0
         self.path_ = None
 
@@ -101,11 +96,11 @@ class PurePursuitController:
             robot_pose.pose.position.y - self.path_.poses[-1].pose.position.y)
 
         if dist_to_goal > self.approach_velocity_scaling_dist_:
-            goal_approach_target_vel = self.desired_linear_vel_
+            goal_approach_target_vel = self.max_linear_vel_
         elif dist_to_goal > self.goal_dist_buf_:
             range_ = self.approach_velocity_scaling_dist_ - self.goal_dist_buf_
             scale = (dist_to_goal - self.goal_dist_buf_) / max(range_, 1e-4)
-            goal_approach_target_vel = self.min_approach_linear_velocity_ + scale * (self.desired_linear_vel_ - self.min_approach_linear_velocity_)
+            goal_approach_target_vel = self.min_approach_linear_velocity_ + scale * (self.max_linear_vel_ - self.min_approach_linear_velocity_)
         elif dist_to_goal > self.goal_dist_tol_:
             final_crawl_vel = 0.025
             range_ = self.goal_dist_buf_ - self.goal_dist_tol_
@@ -117,7 +112,7 @@ class PurePursuitController:
             scale = dist_to_goal / max(range_, 1e-4)
             goal_approach_target_vel = scale * final_crawl_vel
 
-        goal_approach_target_vel = np.clip(goal_approach_target_vel, 0.0, self.desired_linear_vel_)
+        goal_approach_target_vel = np.clip(goal_approach_target_vel, 0.0, self.max_linear_vel_)
         target_vel_lin_x = goal_approach_target_vel * speed_scale
         
         # Pure pursuit logic for angular velocity

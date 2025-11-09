@@ -20,9 +20,26 @@ guidance_motion_node:
     max_moving_speed: 1.5
     max_angular_speed: 1.2
 
-follow_user_node:
+follow_user_motion_node:
   ros__parameters:
-    stuck_timeout_sec: 5.0
-    stuck_distance_threshold: 0.05
-    follow_distance: 1.5
-    max_follow_speed: 0.8
+    # Lookahead Parameters
+    min_lookahead_dist: 0.3                  # Minimum lookahead distance, for safety at low speeds/standstill.
+    max_lookahead_dist: 1.2                  # Maximum lookahead distance, prevents cutting corners too much.
+    lookahead_time: 1.5                      # Key parameter: lookahead distance = lookahead_time * current_speed. 1.5-2.0s is a good starting point.
+
+    # Velocity & Acceleration Parameters
+    max_linear_vel: 0.70                     # Safety limit for max linear speed.
+    linear_acceleration: 0.50                # Linear acceleration (m/s^2)
+    linear_deceleration: 0.75                # Linear deceleration (m/s^2)
+    max_angular_vel: 1.0                     # Maximum angular velocity
+    max_angular_acceleration: 4.0            # Maximum angular acceleration (rad/s^2)
+
+    # Goal Approach Parameters
+    min_approach_linear_velocity: 0.05       # Minimum velocity when approaching the goal.
+    approach_velocity_scaling_dist: 1.0      # Distance at which to start scaling down velocity when approaching the goal.
+    goal_dist_buf: 0.15                      # Intermediate buffer distance for multi-stage goal approach.
+    goal_dist_tol: 0.075                     # Goal tolerance in meters. Reduce for better accuracy.
+    
+    # Turning Parameters
+    heading_error_for_pure_rotation: 1.0 # 60 degrees
+    min_heading_error_for_motion: 0.5  # 30 degrees

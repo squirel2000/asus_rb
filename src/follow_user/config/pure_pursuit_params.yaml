@@ -1,4 +1,4 @@
-pure_pursuit_controller:
+follow_user_motion_node:
   ros__parameters:
     # Lookahead Parameters
     lookahead_dist: 0.8                      # Base lookahead distance (use this for low speeds). Now mostly superseded by lookahead_time.
@@ -7,14 +7,14 @@ pure_pursuit_controller:
     lookahead_time: 1.5                      # Key parameter: lookahead distance = lookahead_time * current_speed. 1.5-2.0s is a good starting point.
 
     # Velocity Parameters
-    desired_linear_vel: 0.50                 # Desired linear velocity. Should not exceed max_linear_vel.
+    desired_linear_vel: 0.70                 # Desired linear velocity. Should not exceed max_linear_vel.
     max_linear_vel: 0.70                     # Safety limit for max linear speed.
-    max_angular_vel: 1.2                     # Maximum angular velocity
-    max_angular_acceleration: 1.0            # Maximum angular acceleration (rad/s^2)
+    max_angular_vel: 1.0                     # Maximum angular velocity
+    max_angular_acceleration: 4.0            # Maximum angular acceleration (rad/s^2)
     min_approach_linear_velocity: 0.05       # Minimum velocity when approaching the goal.
     approach_velocity_scaling_dist: 1.0      # Distance at which to start scaling down velocity when approaching the goal.
     
-    # MODIFIED: Parameters for controlling turn-in-place vs. spiral behavior
+    # Parameters for controlling turn-in-place vs. spiral behavior
     # If heading error > this value (rad), robot will stop and rotate in-place.
     heading_error_for_pure_rotation: 1.0 # 60 degrees
     # If heading error < this value (rad), robot will use its full calculated speed.

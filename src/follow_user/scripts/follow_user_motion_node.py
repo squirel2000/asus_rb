@@ -67,17 +67,13 @@ class FollowUserMotionNode(Node):
         self.neck_yaw, self.neck_pitch = 0.0 , 0.0
         self.human_relative_pose, self.human_absolute_pose = None, None
 
-        # Parameters for smooth rotation
-        self.declare_parameter('angular_acceleration', 0.20)
-        self.declare_parameter('angular_deceleration', 0.40)
-
         # Parameters for pure pursuit
-        self.declare_parameter("lookahead_dist", 1.0)
         self.declare_parameter("min_lookahead_dist", 0.5)
         self.declare_parameter("max_lookahead_dist", 1.5)
         self.declare_parameter("lookahead_time", 1.5)
-        self.declare_parameter("desired_linear_vel", 0.5)
         self.declare_parameter("max_linear_vel", 0.20)
+        self.declare_parameter("linear_acceleration", 0.3)
+        self.declare_parameter("linear_deceleration", 0.6)
         self.declare_parameter('max_angular_vel', 1.2)
         self.declare_parameter("max_angular_acceleration", 1.0)
         self.declare_parameter("heading_error_for_pure_rotation", 1.57)
@@ -86,16 +82,7 @@ class FollowUserMotionNode(Node):
         self.declare_parameter("approach_velocity_scaling_dist", 0.6)
         self.declare_parameter("goal_dist_buf", 0.15)
         self.declare_parameter("goal_dist_tol", 0.075)
-        self.declare_parameter("linear_acceleration", 0.3)
-        self.declare_parameter("linear_deceleration", 0.6)
-        self.declare_parameter("target_velocity_ema_alpha", 0.2)
         
-        self.motion_params = {
-            'max_angular_vel': self.get_parameter('max_angular_vel').get_parameter_value().double_value,
-            'angular_acceleration': self.get_parameter('angular_acceleration').get_parameter_value().double_value,
-            'angular_deceleration': self.get_parameter('angular_deceleration').get_parameter_value().double_value
-        }
-
         # Utility classes
         self.motion_utils = MotionUtils(self)
         self.pure_pursuit_controller = PurePursuitController(self)
