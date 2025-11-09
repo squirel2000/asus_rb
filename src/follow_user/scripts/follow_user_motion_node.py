@@ -53,10 +53,8 @@ class FollowUserMotionNode(Node):
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # Head Control
-        if self.control_head:
-            self.head_controller = HeadController(self.get_logger())
-        else:
-            self.head_controller = None
+        self.head_controller = HeadController(self.get_logger())
+        self.head_controller.start_listening()
 
         # State
         self.goal_handle = None
@@ -106,6 +104,9 @@ class FollowUserMotionNode(Node):
             cmd_vel = self.pure_pursuit_controller.compute_velocity_commands(self.robot_pose, self.current_velocity)
             self.cmd_vel_publisher.publish(cmd_vel)
             # self.get_logger().info(f"Following path. Vel: {cmd_vel.linear.x:.2f}, Ang: {cmd_vel.angular.z:.2f}, human_abs: ({self.human_absolute_pose.pose.position.x:.2f}, {self.human_absolute_pose.pose.position.y:.2f}), last_path_point: ({self.pure_pursuit_controller.path_.poses[-1].pose.position.x:.2f}, {self.pure_pursuit_controller.path_.poses[-1].pose.position.y:.2f})")
+            
+            # Update head tracking
+            self._update_head_tracking(self.robot_pose, self.human_absolute_pose)
 
     def human_relative_pose_front_callback(self, msg):
         """Apply the shrinking in 3D (x, y, z): move the target point closer to the camera by `FOLLOW_USER_OFFSET`
@@ -141,6 +142,10 @@ class FollowUserMotionNode(Node):
             x_cam = human_in_camera_frame.pose.position.x
             y_cam = human_in_camera_frame.pose.position.y
             z_cam = human_in_camera_frame.pose.position.z
+
+            # Update neck angles from actual encoder feedback to avoid unstable feedback loop
+            self.neck_yaw = math.radians(self.head_controller.current_neck_yaw_deg)
+            self.neck_pitch = math.radians(self.head_controller.current_neck_pitch_deg)
 
             # Rotation around Y-axis (pitch)
             x_p = x_cam * math.cos(self.neck_pitch) + z_cam * math.sin(self.neck_pitch)
@@ -205,33 +210,41 @@ class FollowUserMotionNode(Node):
             self.pure_pursuit_controller.set_path(None)
 
 
-    def get_head_angles_to_human(self, relative_pose_msg):
-        # TODO: The calculated angle is relative to camera, but the neck yaw/pitch angles are relative to the robot base_link frame.
-        x, y, z = relative_pose_msg.pose.position.x, relative_pose_msg.pose.position.y, relative_pose_msg.pose.position.z
-        point_vec = np.array([x, y, z])
-        vec_from_camera = point_vec - CAMERA_OFFSET
-        x_cam, y_cam, z_cam = vec_from_camera
-        distance = math.sqrt(x_cam**2 + y_cam**2)
-        yaw = math.atan2(y_cam, x_cam)
-        pitch = math.atan2(z_cam, math.sqrt(x_cam**2 + y_cam**2))
-        return yaw, pitch, distance
+    def _update_head_tracking(self, robot_pose, human_absolute_pose):
+        # Calculate the vector from robot to human in the map frame
+        dx = human_absolute_pose.pose.position.x - robot_pose.pose.position.x
+        dy = human_absolute_pose.pose.position.y - robot_pose.pose.position.y
+        dz = human_absolute_pose.pose.position.z - robot_pose.pose.position.z
 
-    def _update_head_tracking(self, relative_pose_msg):
-        yaw, pitch, distance = self.get_head_angles_to_human(relative_pose_msg)
-        
-        # Store neck angles
-        self.neck_yaw = yaw
-        self.neck_pitch = pitch
+        # Distance to the human
+        distance = math.sqrt(dx**2 + dy**2 + dz**2)
 
-        self.get_logger().info(f"Head tracking -> Dist: {distance:.2f}m, Yaw: {math.degrees(yaw):.2f}°, Pitch: {math.degrees(pitch):.2f}°")
+        # Get robot's yaw
+        robot_yaw = self._get_yaw_from_quaternion(robot_pose.pose.orientation)
+
+        # To transform the vector from map frame to robot's base_link frame,
+        # we rotate it by the inverse of the robot's yaw.
+        x_base = dx * math.cos(-robot_yaw) - dy * math.sin(-robot_yaw)
+        y_base = dx * math.sin(-robot_yaw) + dy * math.cos(-robot_yaw)
+        z_base = dz
+
+        # Calculate yaw and pitch in radians relative to the robot's base_link frame
+        yaw = math.atan2(y_base, x_base)
+        pitch = math.atan2(-z_base, math.sqrt(x_base**2 + y_base**2))
+
+        # Convert to degrees for the head controller
+        yaw_deg = math.degrees(yaw)
+        pitch_deg = math.degrees(pitch)
+
+        self.get_logger().info(f"Head tracking: ({math.degrees(self.neck_yaw)}°, {math.degrees(self.neck_pitch)}°) -> ({yaw_deg:.2f}°, {pitch_deg:.2f}°), Dist: {distance:.2f}m")
         if self.head_controller:
-            self.head_controller.control_head(yaw, pitch)
+            self.head_controller.control_head(yaw_deg, pitch_deg)
         
+        # Publish feedback to action client
         feedback_msg = FollowUser.Feedback()
         feedback_msg.current_user_distance = distance
         feedback_msg.status = "Following user..."
         feedback_msg.current_pose = self.robot_pose
-
         if self.goal_handle and self.goal_handle.is_active:
             self.goal_handle.publish_feedback(feedback_msg)
 

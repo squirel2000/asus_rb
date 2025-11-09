@@ -39,11 +39,12 @@ def log(message):
     print(f"[{timestamp}] {message}")
 
 class HeadController:
-    def __init__(self):
+    def __init__(self, logger=None):
+        self.logger = logger
         try:
             self.serial_port = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=0.01) # Small timeout for non-blocking read
         except serial.SerialException as e:
-            log(f"Error: Could not open serial port: {e}")
+            self._log(f"Error: Could not open serial port: {e}", 'error')
             self.serial_port = None
 
         self.smoothed_yaw = 0.0
@@ -60,25 +61,38 @@ class HeadController:
         self.current_neck_yaw_deg = 0.0
         self.current_neck_pitch_deg = 0.0
 
+    def _log(self, msg, level='info'):
+        if self.logger:
+            if level == 'info':
+                self.logger.info(msg)
+            elif level == 'warn':
+                self.logger.warn(msg)
+            elif level == 'error':
+                self.logger.error(msg)
+            else:
+                self.logger.info(msg)
+        else:
+            # Fallback to print if no logger is provided
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+            print(f"[{timestamp}] [{level.upper()}] {msg}")
+
     def start_listening(self):
         if self.serial_port and self.serial_port.is_open and not self._running:
             self._running = True
             self._read_thread = threading.Thread(target=self._read_loop, daemon=True)
             self._read_thread.start()
-            log("Started listening for feedback packets.")
+            self._log("Started listening for feedback packets.")
         elif self._running:
-            log("Listener already running.")
+            self._log("Listener already running.")
         else:
-            log("Warning: Serial port not available to start listener.")
+            self._log("Warning: Serial port not available to start listener.", 'warn')
 
     def stop_listening(self):
         if self._running:
             self._running = False
             if self._read_thread:
-                self._read_thread.join(timeout=2)
-                if self._read_thread.is_alive():
-                    log("Warning: Read thread did not terminate gracefully.")
-            log("Stopped listening for feedback packets.")
+                self._read_thread.join(timeout=1)
+            self._log("Stopped listening for feedback packets.")
 
     def _read_loop(self):
         while self._running:
@@ -94,10 +108,13 @@ class HeadController:
                     time.sleep(0.005)
 
             except serial.SerialException as e:
-                log(f"FATAL: Serial communication error: {e}. The device may have disconnected.")
+                self._log(f"FATAL: Serial communication error: {e}. The device may have disconnected.", 'error')
                 self._running = False # Stop the thread on serial error
+            except IOError as e:
+                self._log(f"FATAL: I/O error: {e}. The device may have disconnected.", 'error')
+                self._running = False # Stop the thread on I/O error
             except Exception as e:
-                log(f"Error in read loop: {e}")
+                self._log(f"Error in read loop: {e}", 'error')
                 time.sleep(0.05)
 
     def _process_buffer_for_packets(self):
@@ -126,7 +143,7 @@ class HeadController:
             for b in packet[2:-1]:
                 checksum_calculated ^= b
             if checksum_calculated != packet[-1]:
-                log(f"Warning: Checksum mismatch for packet: {packet.hex(' ')}")
+                self._log(f"Warning: Checksum mismatch for packet: {packet.hex(' ')}", 'warn')
                 continue
 
             self._parse_feedback_payload(packet)
@@ -143,13 +160,13 @@ class HeadController:
             try:
                 self.serial_port.write(cmd)
             except Exception as e:
-                log(f"Error writing head control command to serial port: {e}")
+                self._log(f"Error writing head control command to serial port: {e}", 'error')
                 return
             if logging:
-                log(f"  Sent command: {cmd.hex(' ')}")
-                log(f"  Target: yaw={final_yaw_deg:.2f}, pitch={final_pitch_deg:.2f}, duration={duration_ms}ms")
+                self._log(f"  Sent command: {cmd.hex(' ')}")
+                self._log(f"  Target: yaw={final_yaw_deg:.2f}, pitch={final_pitch_deg:.2f}, duration={duration_ms}ms")
         else:
-            log("Warning: Serial port not open to send head control command.")
+            self._log("Warning: Serial port not open to send head control command.", 'warn')
 
     def _build_packet(self, payload):
         packet = bytearray([0xAA, 0x55, len(payload)]) + payload
@@ -249,18 +266,18 @@ class HeadController:
             return {"error": "Serial port not available or listener not running"}
         
         cmd = self._build_version_request(True)
-        log(f"Sending version request: {cmd.hex(' ')}")
+        self._log(f"Sending version request: {cmd.hex(' ')}")
         self._version_info_ready.clear()
         try:
             self.serial_port.write(cmd)
         except Exception as e:
             msg = f"Error sending version request to serial port: {e}"
-            log(msg)
+            self._log(msg, 'error')
             return {"error": msg}
 
         if not self._version_info_ready.wait(timeout=timeout):
             msg = f"Timeout waiting for version response (waited {timeout} s)."
-            log(msg)
+            self._log(msg, 'warn')
             return {"error": msg}
         
         return self.get_all_feedback_data()
@@ -269,7 +286,7 @@ class HeadController:
         self.stop_listening()
         if self.serial_port and self.serial_port.is_open:
             self.serial_port.close()
-            log("Serial port closed.")
+            self._log("Serial port closed.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Control the robot's head and get firmware version.")
