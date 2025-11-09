@@ -80,6 +80,11 @@ Re-launch all vision services by disabling and re-enabling the following service
 ros2 service call /enable_CV vision_srv/srv/SetTask “{task: follow realsense2 realsense, active: True}”
 ```
 
+### Commit to GitHub with My Account
+
+```bash
+git -c user.name="TingYing Wu" -c user.email="tingying.wu@gmail.com" commit -m "Your commit message"
+```
 
 ## Code Flow
 

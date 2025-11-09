@@ -51,6 +51,10 @@ class TaskCoordinatorNode(Node):
         self.get_logger().info('Task Coordinator Node has been started.')
 
     def human_relative_pose_callback(self, msg):
+        # TODO: Workaround: Reverse the x and y coordinate to match robot's frame of reference
+        msg.pose.position.x = -msg.pose.position.x
+        msg.pose.position.y = -msg.pose.position.y
+
         # TODO: Add any processing if needed
         if self.is_follow_mode and self.follow_user_goal_accepted:
             self.human_relative_pose_publisher.publish(msg)

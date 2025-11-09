@@ -180,7 +180,7 @@ class FollowUserMotionNode(Node):
             self.human_absolute_pose.pose.position.x = x_map
             self.human_absolute_pose.pose.position.y = y_map
             self.human_absolute_pose.pose.position.z = self.robot_pose.pose.position.z + z_b # Approximate height
-            self.human_absolute_pose.pose.orientation.w = 1.0
+            self.human_absolute_pose.pose.orientation = self.robot_pose.pose.orientation # Orientation is not critical here
             
             self.human_absolute_pose_publisher.publish(self.human_absolute_pose)
 
