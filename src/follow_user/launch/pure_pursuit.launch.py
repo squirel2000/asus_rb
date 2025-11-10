@@ -11,18 +11,8 @@ def generate_launch_description():
     # Get the path to this package
     pkg_dir = get_package_share_directory('follow_user')
 
-    # Declare launch arguments
-    params_file = LaunchConfiguration('params_file')
-
-    declare_params_file_arg = DeclareLaunchArgument(
-        'params_file',
-        default_value=PathJoinSubstitution([
-            FindPackageShare('motion_common'),
-            'config',
-            'motion_params.yaml'
-        ]),
-        description='Path to the ROS2 parameters file for motion nodes'
-    )
+    # Get the path to the config file
+    params_file = os.path.join(pkg_dir, 'config', 'pure_pursuit_params.yaml')
 
     # Declare the robot_ip launch argument
     robot_ip_arg = DeclareLaunchArgument('robot_ip', default_value='192.168.11.1')
@@ -41,13 +31,18 @@ def generate_launch_description():
 
     return LaunchDescription([
         robot_ip_arg,
-        declare_params_file_arg,
         Node(
             package='follow_user',
-            executable='follow_user_motion_node.py',
-            name='follow_user_motion_node',
+            executable='path_search_server.py',
+            name='path_search_server',
             output='screen',
-            arguments=['--robot-ip', LaunchConfiguration('robot_ip')],
+            arguments=['--robot-ip', LaunchConfiguration('robot_ip')]
+        ),
+        Node(
+            package='follow_user',
+            executable='pure_pursuit_controller',
+            name='pure_pursuit_controller',
+            output='screen',
             parameters=[params_file]
         ),
         record_log_launch,

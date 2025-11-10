@@ -17,28 +17,39 @@ def launch_setup(context, *args, **kwargs):
     bag_path = os.path.join(output_dir, bag_name) if output_dir else bag_name
 
     # Topic lists
-    navigation_topics = ["/tf", 
-                         "/slamware_ros_sdk_server_node/scan",
-                         "/slamware_ros_sdk_server_node/odom", 
-                         "/slamware_ros_sdk_server_node/global_plan_path", 
-                         "/robot_pose", 
-                         "/amr_events", 
-                         "/remaining_targets", 
-                         "/current_max_speed",
-                         ]
-    guidance_topics = navigation_topics + ["/human_relative_pose_rear_raw", 
-                                           "/human_relative_pose_rear", 
-                                           "/set_max_speed", 
+    base_topics = ["/tf",
+                   "/slamware_ros_sdk_server_node/scan",
+                   "/slamware_ros_sdk_server_node/odom",
+                   "/robot_pose",
+                   "/amr_events",
+                   ]
+    navigation_topics = base_topics + ["/slamware_ros_sdk_server_node/global_plan_path",
+                                       "/remaining_targets",
+                                       "/current_max_speed",
+                                       ]
+    guidance_topics = navigation_topics + ["/human_relative_pose_rear_raw",
+                                           "/human_relative_pose_rear",
+                                           "/set_max_speed",
                                            ]
+    follow_user_topics = base_topics + ["/cmd_vel",
+                                        "/clicked_point",
+                                        "/human_relative_pose_front",
+                                        "/follow_user/human_absolute_pose",
+                                        "/follow_user/planned_path",
+                                        "/lookahead_point",
+                                        ]
 
     navigation_cmd = ["ros2", "bag", "record", *navigation_topics, "-o", bag_path]
     guidance_cmd = ["ros2", "bag", "record", *guidance_topics, "-o", bag_path]
+    follow_user_cmd = ["ros2", "bag", "record", *follow_user_topics, "-o", bag_path]
 
     # Create the corresponding ExecuteProcess according to the task
     if task == "navigation":
         selected_cmd = navigation_cmd
     elif task == "guidance":
         selected_cmd = guidance_cmd
+    elif task == "follow_user":
+        selected_cmd = follow_user_cmd
     else:
         raise ValueError(f"Unknown task type: {task}")
 
@@ -52,8 +63,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "task",
             default_value=TextSubstitution(text="guidance"),
-            description="Task type: navigation or guidance",
-            choices=['navigation', 'guidance']
+            description="Task type: navigation, guidance, or follow_user",
+            choices=['navigation', 'guidance', 'follow_user']
         ),
         DeclareLaunchArgument(
             "label",

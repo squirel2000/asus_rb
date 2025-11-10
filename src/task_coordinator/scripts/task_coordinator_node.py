@@ -16,9 +16,6 @@ class TaskCoordinatorNode(Node):
     def __init__(self):
         super().__init__('task_coordinator_node')
 
-        # Parameters
-        self.declare_parameter('user_pose_topic', '/user_tracker/target_pose')
-
         # Action Clients
         self.follow_user_client = ActionClient(self, FollowUser, 'follow_user')
         self.navigate_client = ActionClient(self, Navigate, 'navigate_to_pose')
@@ -27,21 +24,24 @@ class TaskCoordinatorNode(Node):
         self.task_server = ActionServer(self, Task, 'task_server', self.execute_task_callback)
         self.follow_user_server = ActionServer(self, FollowUser, 'follow_user_task', self.execute_follow_user_callback)
 
+        # Publishers
+        self.human_relative_pose_publisher = self.create_publisher(PoseStamped, '/human_relative_pose_front', 10)
+
         # Subscribers
-        user_pose_topic = self.get_parameter('user_pose_topic').get_parameter_value().string_value
-        self.user_pose_subscription = self.create_subscription(
-            PoseStamped,
-            user_pose_topic,
-            self.user_pose_callback,
-            10)
-        
+        self.user_pose_subscription = self.create_subscription(PoseStamped, '/human_relative_pose_front_raw', self.human_relative_pose_callback, 10)
+
+        # State variables        
         self.follow_user_goal_handle = None
         self.navigate_goal_handle = None
         self.current_user_pose = None
         self.is_follow_mode = True  # Default to follow mode
+        self.follow_user_goal_accepted = False
 
         # Threading event to signal completion of navigation
         self.nav_done_event = threading.Event()
+        self.user_pose_event = threading.Event()
+        self.follow_user_done_event = threading.Event()
+        self.follow_user_result = FollowUser.Result()
         self.nav_success_result = False
 
         # Keep a reference to the future for getting the result
@@ -50,10 +50,16 @@ class TaskCoordinatorNode(Node):
 
         self.get_logger().info('Task Coordinator Node has been started.')
 
-    def user_pose_callback(self, msg):
+    def human_relative_pose_callback(self, msg):
+        # TODO: Workaround: Reverse the x and y coordinate to match robot's frame of reference
+        msg.pose.position.x = -msg.pose.position.x
+        msg.pose.position.y = -msg.pose.position.y
+
+        # TODO: Add any processing if needed
+        if self.is_follow_mode and self.follow_user_goal_accepted:
+            self.human_relative_pose_publisher.publish(msg)
         self.current_user_pose = msg
-        if self.is_follow_mode and self.follow_user_goal_handle and self.follow_user_goal_handle.is_active:
-            self.send_follow_user_goal(self.current_user_pose)
+        self.user_pose_event.set()  # Signal that a new pose has been received
 
     def execute_task_callback(self, goal_handle):
         self.get_logger().info('Executing navigation task...')
@@ -101,30 +107,33 @@ class TaskCoordinatorNode(Node):
 
         if self.current_user_pose is None:
             self.get_logger().info('User pose not available, waiting...')
-            goal_handle.abort()
-            return FollowUser.Result()
+            self.user_pose_event.clear()
+            self.user_pose_event.wait()
 
         self.follow_user_goal_handle = goal_handle
-        self.send_follow_user_goal(self.current_user_pose)
         
-        # This is not ideal, but for now we leave it.
-        # A better implementation would use a similar event-based mechanism.
-        while rclpy.ok() and self.follow_user_goal_handle.is_active:
-            rclpy.spin_once(self, timeout_sec=0.1)
+        # Extract parameters from the incoming goal request
+        user_id = goal_handle.request.user_id
+        following_distance = goal_handle.request.following_distance
+        self.send_follow_user_goal(user_id, following_distance)
         
-        return FollowUser.Result()
+        # Wait for the goal to be done
+        self.follow_user_done_event.clear()
+        self.follow_user_done_event.wait()
+
+        return self.follow_user_result
 
 
-    def send_follow_user_goal(self, pose):
+    def send_follow_user_goal(self, user_id, following_distance):
         if not self.follow_user_client.wait_for_server(timeout_sec=1.0):
             self.get_logger().info('Follow User action server not available, waiting...')
             return
 
         goal_msg = FollowUser.Goal()
-        goal_msg.user_id = "user_1"  # This can be dynamic based on the goal
-        goal_msg.user_pose = pose
+        goal_msg.user_id = user_id
+        goal_msg.following_distance = following_distance
 
-        self.get_logger().info('Sending goal to Follow User action server...')
+        self.get_logger().info(f'Sending goal to Follow User action server for user: {user_id} at {following_distance:.2f}m...')
         send_goal_future = self.follow_user_client.send_goal_async(
             goal_msg,
             feedback_callback=self.follow_user_feedback_callback)
@@ -155,12 +164,16 @@ class TaskCoordinatorNode(Node):
                 self.follow_user_goal_handle.abort()
             return
         self.get_logger().info('Follow User goal accepted')
+        self.follow_user_goal_accepted = True
         self.follow_user_get_result_future = goal_handle.get_result_async()
         self.follow_user_get_result_future.add_done_callback(self.follow_user_result_callback)
 
     def follow_user_result_callback(self, future):
         result = future.result().result
         self.get_logger().info(f'Follow User result: {result.final_status}')
+        self.follow_user_result = result
+        self.follow_user_done_event.set()
+        self.follow_user_goal_accepted = False
         if self.follow_user_goal_handle:
             if result.final_status == "Success":
                 self.follow_user_goal_handle.succeed()
@@ -169,10 +182,10 @@ class TaskCoordinatorNode(Node):
         self.follow_user_goal_handle = None
 
     def follow_user_feedback_callback(self, feedback_msg):
-        self.get_logger().info(f'Follow User feedback: Distance = {feedback_msg.feedback.current_distance:.2f}m')
+        self.get_logger().info(f'Follow User feedback: Distance = {feedback_msg.feedback.current_user_distance:.2f}m')
         if self.follow_user_goal_handle:
             feedback = FollowUser.Feedback()
-            feedback.current_distance = feedback_msg.feedback.current_distance
+            feedback.current_user_distance = feedback_msg.feedback.current_user_distance
             self.follow_user_goal_handle.publish_feedback(feedback)
 
 

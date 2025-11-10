@@ -1,0 +1,47 @@
+follow_user_motion_node:
+  ros__parameters:
+    # Lookahead Parameters
+    lookahead_dist: 0.8                      # Base lookahead distance (use this for low speeds). Now mostly superseded by lookahead_time.
+    min_lookahead_dist: 0.3                  # Minimum lookahead distance, for safety at low speeds/standstill.
+    max_lookahead_dist: 1.2                  # Maximum lookahead distance, prevents cutting corners too much.
+    lookahead_time: 1.5                      # Key parameter: lookahead distance = lookahead_time * current_speed. 1.5-2.0s is a good starting point.
+
+    # Velocity Parameters
+    desired_linear_vel: 0.70                 # Desired linear velocity. Should not exceed max_linear_vel.
+    max_linear_vel: 0.70                     # Safety limit for max linear speed.
+    max_angular_vel: 1.0                     # Maximum angular velocity
+    max_angular_acceleration: 4.0            # Maximum angular acceleration (rad/s^2)
+    min_approach_linear_velocity: 0.05       # Minimum velocity when approaching the goal.
+    approach_velocity_scaling_dist: 1.0      # Distance at which to start scaling down velocity when approaching the goal.
+    
+    # Parameters for controlling turn-in-place vs. spiral behavior
+    # If heading error > this value (rad), robot will stop and rotate in-place.
+    heading_error_for_pure_rotation: 1.0 # 60 degrees
+    # If heading error < this value (rad), robot will use its full calculated speed.
+    # Between these two values, speed is scaled linearly to create a spiral.
+    min_heading_error_for_motion: 0.5  # 30 degrees
+
+    # Tolerances
+    goal_dist_buf: 0.15                      # Intermediate buffer distance for multi-stage goal approach.
+    goal_dist_tol: 0.075                      # Goal tolerance in meters. Reduce for better accuracy.
+
+    # Topics and Frames
+    path_topic: "/follow_user/planned_path"
+    odom_topic: "/slamware_ros_sdk_server_node/odom"
+    cmd_vel_topic: "/cmd_vel"
+    base_frame: "base_link"
+    global_frame: "slamware_map"
+
+    # Controller Settings
+    controller_frequency: 20.0
+    # Linear acceleration / deceleration (m/s^2)
+    # Note: the controller applies deceleration as a positive magnitude internally.
+    linear_acceleration: 0.20
+    linear_deceleration: 0.40
+    # Odom timeout (seconds). If no new odom is received within this interval, controller will stop for safety.
+    odom_timeout: 1.0
+    # Diagnostics and safety tuning
+    # If measured dt reaches max_dt repeatedly, controller will warn and stop after the consecutive threshold.
+    max_dt_consec_threshold: 3
+    # EMA alpha for smoothing reported dt values on the diagnostics topic (0..1)
+    odom_dt_ema_alpha: 0.2
