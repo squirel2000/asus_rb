@@ -98,6 +98,7 @@ class FollowUserMotionNode(Node):
         
         self.get_logger().info(
             f"Parameters: "
+            f"control_head={self.control_head}, "
             f"lagging_dist_thres={self.lagging_dist_thres:.2f}, "
             f"lost_user_timeout={self.lost_user_timeout:.2f}, "
         )
@@ -284,6 +285,15 @@ class FollowUserMotionNode(Node):
         self.get_logger().info(f'Executing goal for user: {self.goal_handle.request.user_id}')
 
         while rclpy.ok() and self.goal_handle.is_active:
+
+            feedback_msg = FollowUser.Feedback(status="CHECKING_EXECUTION_STATUS")
+            if not self.robot_pose:
+                self.get_logger().warn("Robot pose is unavailable. Please check the connection with the AMR.")
+                self.goal_handle.publish_feedback(feedback_msg)
+            if not self.human_last_update_time:
+                self.get_logger().warn("Human pose is unavailable. Please check the CV service.")
+                self.goal_handle.publish_feedback(feedback_msg)
+
             if self.goal_handle.is_cancel_requested:
                 self.goal_handle.canceled()
                 self.get_logger().info('Goal canceled by the client.')
@@ -292,6 +302,7 @@ class FollowUserMotionNode(Node):
                 self.path_publisher.publish(Path())
                 self.goal_handle = None
                 return FollowUser.Result(message='Goal canceled by the client.')
+            
             rclpy.spin_once(self, timeout_sec=0.1)
 
         # If the loop exits because the goal is no longer active (but not cancelled), succeed it.
