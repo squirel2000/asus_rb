@@ -40,9 +40,24 @@ def generate_launch_description():
         arguments=['--ros-args', '--log-level', 'info']
     )
 
+    # Define guidance_motion_node
+    follow_user_motion_node = Node(
+        package='follow_user',
+        executable='follow_user_motion_node.py',
+        name='follow_user_motion_node',
+        output='screen',
+        parameters=[params_file],
+        arguments=[
+                   '--robot_ip', '192.168.222.1',
+                   '--no_head_control',
+                   '--ros-args', '--log-level', 'info',
+                   ]
+    )
+
     # Create LaunchDescription
     return LaunchDescription([
         declare_params_file_arg,
         navigation_motion_node,
-        guidance_motion_node
+        guidance_motion_node,
+        follow_user_motion_node
     ])

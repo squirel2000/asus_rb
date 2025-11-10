@@ -47,7 +47,7 @@ def generate_launch_description():
             executable='follow_user_motion_node.py',
             name='follow_user_motion_node',
             output='screen',
-            arguments=['--robot-ip', LaunchConfiguration('robot_ip')],
+            arguments=['--robot_ip', LaunchConfiguration('robot_ip')],
             parameters=[params_file]
         ),
         record_log_launch,

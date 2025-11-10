@@ -5,7 +5,7 @@ from rclpy.node import Node
 from rclpy.action import ActionClient, ActionServer
 from rclpy.executors import MultiThreadedExecutor
 from geometry_msgs.msg import PoseStamped
-from follow_user.action import FollowUser
+from motion_common.action import FollowUser
 from navigation.action import Navigate
 from task_coordinator.action import Task
 

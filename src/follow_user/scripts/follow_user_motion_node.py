@@ -11,12 +11,13 @@ import tf2_ros
 from utils.head_control import HeadController
 from utils.motion_utils import MotionUtils
 from utils.pure_pursuit_controller import PurePursuitController
-from follow_user.action import FollowUser
+from motion_common.action import FollowUser
 from copy import deepcopy
 
 # Constants
 CAMERA_OFFSET = np.array([0.0, 0.0, 0.0]) # Camera position (x,y,z) in base_link frame
 FOLLOW_USER_OFFSET = 0.25 # Move the target point closer to avoid path not found issues
+STATIC_NECK_ANGLE = 0.0
 
 class FollowUserMotionNode(Node):
     """
@@ -26,7 +27,6 @@ class FollowUserMotionNode(Node):
     """
     def __init__(self, robot_ip, control_head=False):
         super().__init__('follow_user_motion_node')
-        self.get_logger().info('Follow User Motion Node has been started.')
 
         self.robot_ip = robot_ip
         self.control_head = control_head
@@ -53,8 +53,10 @@ class FollowUserMotionNode(Node):
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # Head Control
-        self.head_controller = HeadController(self.get_logger())
-        self.head_controller.start_listening()
+        self.head_controller = None
+        if self.control_head:
+            self.head_controller = HeadController(self.get_logger())
+            self.head_controller.start_listening()
 
         # State
         self.goal_handle = None
@@ -63,7 +65,9 @@ class FollowUserMotionNode(Node):
         self.path_msg = None
         self.last_path_search_time = self.get_clock().now()
         self.neck_yaw, self.neck_pitch = 0.0 , 0.0
-        self.human_relative_pose, self.human_absolute_pose = None, None
+        self.human_absolute_pose = None
+        self.human_last_update_time = None
+        self.current_user_distance = None
 
         # Parameters for pure pursuit
         self.declare_parameter("min_lookahead_dist", 0.5)
@@ -80,10 +84,23 @@ class FollowUserMotionNode(Node):
         self.declare_parameter("approach_velocity_scaling_dist", 0.6)
         self.declare_parameter("goal_dist_buf", 0.15)
         self.declare_parameter("goal_dist_tol", 0.075)
-        
+
+        self.declare_parameter("lagging_dist_thres", 1.5)
+        self.declare_parameter("lost_user_timeout", 1.0)
+        self.lagging_dist_thres = self.get_parameter("lagging_dist_thres").get_parameter_value().double_value
+        self.lost_user_timeout = self.get_parameter("lost_user_timeout").get_parameter_value().double_value
+
         # Utility classes
         self.motion_utils = MotionUtils(self)
         self.pure_pursuit_controller = PurePursuitController(self)
+
+        self.get_logger().info('Follow User Motion Node has been started.')
+        
+        self.get_logger().info(
+            f"Parameters: "
+            f"lagging_dist_thres={self.lagging_dist_thres:.2f}, "
+            f"lost_user_timeout={self.lost_user_timeout:.2f}, "
+        )
 
     def odom_callback(self, msg):
         self.current_velocity = msg.twist.twist
@@ -94,6 +111,18 @@ class FollowUserMotionNode(Node):
         self.robot_pose = msg        
         if self.goal_handle is None or not self.goal_handle.is_active:
             return
+
+        _human_updated = (self.human_last_update_time is not None and
+                 (self.get_clock().now() - self.human_last_update_time).nanoseconds / 1e9 < self.lost_user_timeout)
+    
+        if _human_updated:
+            if self.current_user_distance < self.lagging_dist_thres:
+                _status = "FOLLOWING_USER"
+            else:
+                _status = "LAGGING_BEHIND_USER"
+        else:
+            _status = "LOST_USER"
+            self.get_logger().warn("LOST_USER: No relative pose update recently")
 
         if self.human_absolute_pose:
             now = self.get_clock().now()
@@ -107,6 +136,13 @@ class FollowUserMotionNode(Node):
             
             # Update head tracking
             self._update_head_tracking(self.robot_pose, self.human_absolute_pose)
+
+        # Publish feedback to action client
+        feedback_msg = FollowUser.Feedback()
+        feedback_msg.current_user_distance = self.current_user_distance
+        feedback_msg.current_pose = self.robot_pose
+        feedback_msg.status = _status
+        self.goal_handle.publish_feedback(feedback_msg)
 
     def human_relative_pose_front_callback(self, msg):
         """Apply the shrinking in 3D (x, y, z): move the target point closer to the camera by `FOLLOW_USER_OFFSET`
@@ -128,24 +164,26 @@ class FollowUserMotionNode(Node):
             processed_pose.pose.position.x = 0.0
             processed_pose.pose.position.y = 0.0
             processed_pose.pose.position.z = 0.0
-        self.human_relative_pose = processed_pose
-        
-        # Update the human absolute pose
-        self._update_human_absolute_pose(self.human_relative_pose)
 
-    def _update_human_absolute_pose(self, human_relative_pose):
+        self.current_user_distance = dist
+        self.human_last_update_time = self.get_clock().now()
+
+        # Update the human absolute pose
+        self._update_human_absolute_pose(processed_pose)
+
+    def _update_human_absolute_pose(self, human_relative_pose_offset):
         """Update the human's absolute pose based on the human relative pose from the front camera.
         """
         try:
             # Create a PoseStamped message for the human in the camera frame
-            human_in_camera_frame = deepcopy(human_relative_pose)
+            human_in_camera_frame = deepcopy(human_relative_pose_offset)
             x_cam = human_in_camera_frame.pose.position.x
             y_cam = human_in_camera_frame.pose.position.y
             z_cam = human_in_camera_frame.pose.position.z
 
             # Update neck angles from actual encoder feedback to avoid unstable feedback loop
-            self.neck_yaw = math.radians(self.head_controller.current_neck_yaw_deg)
-            self.neck_pitch = math.radians(self.head_controller.current_neck_pitch_deg)
+            self.neck_yaw = math.radians(self.head_controller.current_neck_yaw_deg) if self.control_head else STATIC_NECK_ANGLE
+            self.neck_pitch = math.radians(self.head_controller.current_neck_pitch_deg) if self.control_head else STATIC_NECK_ANGLE
 
             # Rotation around Y-axis (pitch)
             x_p = x_cam * math.cos(self.neck_pitch) + z_cam * math.sin(self.neck_pitch)
@@ -237,16 +275,8 @@ class FollowUserMotionNode(Node):
         pitch_deg = math.degrees(pitch)
 
         self.get_logger().info(f"Head tracking: ({math.degrees(self.neck_yaw)}°, {math.degrees(self.neck_pitch)}°) -> ({yaw_deg:.2f}°, {pitch_deg:.2f}°), Dist: {distance:.2f}m")
-        if self.head_controller:
+        if self.control_head and self.head_controller:
             self.head_controller.control_head(yaw_deg, pitch_deg)
-        
-        # Publish feedback to action client
-        feedback_msg = FollowUser.Feedback()
-        feedback_msg.current_user_distance = distance
-        feedback_msg.status = "Following user..."
-        feedback_msg.current_pose = self.robot_pose
-        if self.goal_handle and self.goal_handle.is_active:
-            self.goal_handle.publish_feedback(feedback_msg)
 
 
     def execute_callback(self, goal_handle):
@@ -256,18 +286,18 @@ class FollowUserMotionNode(Node):
         while rclpy.ok() and self.goal_handle.is_active:
             if self.goal_handle.is_cancel_requested:
                 self.goal_handle.canceled()
-                self.get_logger().info('Goal canceled')
+                self.get_logger().info('Goal canceled by the client.')
                 # Stop the robot and clear the path
                 self.cmd_vel_publisher.publish(Twist())
                 self.path_publisher.publish(Path())
                 self.goal_handle = None
-                return FollowUser.Result(final_status='Goal canceled')
+                return FollowUser.Result(message='Goal canceled by the client.')
             rclpy.spin_once(self, timeout_sec=0.1)
 
         # If the loop exits because the goal is no longer active (but not cancelled), succeed it.
         self.goal_handle.succeed()
         self.goal_handle = None
-        return FollowUser.Result(final_status='Follow task finished.')
+        return FollowUser.Result(message='Follow task finished.')
     
     def destroy_node(self):
         if self.head_controller:
@@ -277,8 +307,8 @@ class FollowUserMotionNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     parser = argparse.ArgumentParser(description="Follow user motion node with path planning and head control.")
-    parser.add_argument("--robot-ip", required=True, help="The IP address of the robot.")
-    parser.add_argument("--no-head-control", action="store_true", help="Disable head control.")
+    parser.add_argument("--robot_ip", default='192.168.11.1', help="The IP address of the robot.")
+    parser.add_argument("--no_head_control", action="store_true", help="Disable head control.")
     args, _ = parser.parse_known_args()
     
     node = FollowUserMotionNode(robot_ip=args.robot_ip, control_head=not args.no_head_control)
