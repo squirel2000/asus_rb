@@ -4,7 +4,6 @@ from geometry_msgs.msg import Twist, Point
 import angles
 
 # Constants
-FOLLOW_DIST_POINTS = 15
 DT = 0.05  # Assuming 20Hz control loop from the motion node
 HEADING_DEADZONE = math.radians(5.0)  # Apply a small dead zone to avoid jitter around zero (±5.0 degrees)
 
@@ -38,32 +37,10 @@ class PurePursuitController:
 
     def compute_velocity_commands(self, robot_pose, current_velocity):
         # High-level dispatcher: choose short-path rotation or full pure-pursuit
-        if self.path_ is None or not self.path_.poses:
+        if not self.path_ or not self.path_.poses:
             return self._rectify_velocity(0.0, 0.0, current_velocity)
 
-        if len(self.path_.poses) < FOLLOW_DIST_POINTS:
-            return self._rotate_to_track_user(robot_pose, current_velocity)
-
         return self._pure_pursuit_control(robot_pose, current_velocity)
-
-    def _rotate_to_track_user(self, robot_pose, current_velocity):
-        """Rotate in place (with deceleration) to face the final path point."""
-        target_pose = self.path_.poses[-1]
-        angle_to_target = math.atan2(
-            target_pose.pose.position.y - robot_pose.pose.position.y,
-            target_pose.pose.position.x - robot_pose.pose.position.x
-        )
-        heading_error = angles.normalize_angle(angle_to_target - self.get_yaw_from_quaternion(robot_pose.pose.orientation))
-        heading_error = 0.0 if abs(heading_error) < HEADING_DEADZONE else heading_error  # Apply deadzone to avoid jitter
-
-        # Proportional control for rotation
-        target_vel_ang_z = heading_error * 1.5  # P-controller gain
-        cmd_vel = self._rectify_velocity(0.0, target_vel_ang_z, current_velocity)
-        
-        # Print debug info
-        self._node.get_logger().info(f"_rotate_to_track_user: Target({target_pose.pose.position.x:.2f}, {target_pose.pose.position.y:.2f}), Robot({robot_pose.pose.position.x:.2f}, {robot_pose.pose.position.y:.2f}, {math.degrees(self.get_yaw_from_quaternion(robot_pose.pose.orientation)):.2f} deg), angle to target: {math.degrees(angle_to_target):.2f} deg,  Heading error: {math.degrees(heading_error):.2f} deg, target_vel_ang_z: {target_vel_ang_z:.2f}, cmd_vel.angular.z: {cmd_vel.angular.z:.2f}")
-        
-        return cmd_vel
 
     def _pure_pursuit_control(self, robot_pose, current_velocity):
         """Compute linear and angular commands using the pure pursuit algorithm."""
@@ -75,13 +52,22 @@ class PurePursuitController:
 
         self.lookahead_point_pub_.publish(lookahead_point)
         robot_yaw = self.get_yaw_from_quaternion(robot_pose.pose.orientation)
+
+        # Determine the target for heading calculation. Use the final goal point when close,
+        # otherwise use the lookahead point. This helps with final alignment.
+        dist_to_goal = math.hypot(
+            robot_pose.pose.position.x - self.path_.poses[-1].pose.position.x,
+            robot_pose.pose.position.y - self.path_.poses[-1].pose.position.y)
+
+        heading_target_point = self.path_.poses[-1].pose.position if dist_to_goal < self.approach_velocity_scaling_dist_ else lookahead_point
+
         angle_to_carrot_global = math.atan2(
-            lookahead_point.y - robot_pose.pose.position.y,
-            lookahead_point.x - robot_pose.pose.position.x)
+            heading_target_point.y - robot_pose.pose.position.y,
+            heading_target_point.x - robot_pose.pose.position.x)
 
         # Calculate the heading error
         heading_error = angles.normalize_angle(angle_to_carrot_global - robot_yaw)
-
+        
         # Implement smooth, scaled turning
         speed_scale = 1.0
         if abs(heading_error) > self.heading_error_for_pure_rotation_:
@@ -89,11 +75,6 @@ class PurePursuitController:
         elif abs(heading_error) > self.min_heading_error_for_motion_:
             speed_scale = (self.heading_error_for_pure_rotation_ - abs(heading_error)) / \
                           (self.heading_error_for_pure_rotation_ - self.min_heading_error_for_motion_)
-
-        # Determine the target velocity based on distance to goal
-        dist_to_goal = math.hypot(
-            robot_pose.pose.position.x - self.path_.poses[-1].pose.position.x,
-            robot_pose.pose.position.y - self.path_.poses[-1].pose.position.y)
 
         if dist_to_goal > self.approach_velocity_scaling_dist_:
             goal_approach_target_vel = self.max_linear_vel_
