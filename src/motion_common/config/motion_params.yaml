@@ -46,4 +46,4 @@ follow_user_motion_node:
 
     # Following Parameters
     lagging_dist_thres: 1.5                 # Exceeding this distance is considered lagging behind.(m) 
-    lost_user_timeout: 1.0                  # User not found judgment timeout. (sec)
+    lost_user_timeout: 0.5                  # User not found judgment timeout. (sec)

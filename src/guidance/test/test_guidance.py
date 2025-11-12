@@ -8,7 +8,7 @@ from motion_common.action import Guidance
 import math
 import argparse
 import sys
-
+import signal
 
 def create_pose_stamped(node: Node, x, y, yaw_deg=None):
     """Helper function to create a PoseStamped message."""
@@ -55,6 +55,9 @@ class GuidanceActionClient(Node):
         self._user_id = user_id
         self._speed_ratio = speed_ratio
 
+        self._goal_handle = None
+        self._cancel_requested = False
+
     def send_goal(self, pose):
         goal_msg = Guidance.Goal()
         goal_msg.target_pose = pose
@@ -85,6 +88,8 @@ class GuidanceActionClient(Node):
             return
 
         self.get_logger().info('Goal accepted :)')
+        self._goal_handle = goal_handle
+
         self._get_result_future = goal_handle.get_result_async()
         self._get_result_future.add_done_callback(self.get_result_callback)
 
@@ -100,6 +105,32 @@ class GuidanceActionClient(Node):
             f'Feedback: Pose(x={pose.pose.position.x:.2f}, y={pose.pose.position.y:.2f}), Status: {status}'
         )
 
+    def cancel_goal(self):
+        """Attempt to cancel the active goal."""
+        if self._cancel_requested:
+            return
+        self._cancel_requested = True
+
+        if self._goal_handle is None:
+            self.get_logger().warn('Goal handle not available yet — cannot cancel.')
+            return
+
+        self.get_logger().info('Attempting to cancel goal...')
+        future = self._goal_handle.cancel_goal_async()
+        future.add_done_callback(self.cancel_done_callback)
+
+    def cancel_done_callback(self, future):
+        try:
+            cancel_response = future.result()
+            if len(cancel_response.goals_canceling) > 0:
+                self.get_logger().info('Goal successfully canceled.')
+            else:
+                self.get_logger().warn('Failed to cancel goal or goal already finished.')
+        except Exception as e:
+            self.get_logger().error(f'Cancel request failed: {e}')
+        finally:
+            self.get_logger().info('Shutting down...')
+            rclpy.shutdown()
 
 def main(args=None):
     parser = argparse.ArgumentParser(description='Send a guidance goal.')
@@ -110,7 +141,7 @@ def main(args=None):
     parser.add_argument('--user_id', type=str, default='test', help='User ID string')
     parser.add_argument('--speed_ratio', type=float, default=1.0, help='Speed ratio (0.0~1.0)')
 
-    parsed_args, unknown = parser.parse_known_args(sys.argv[1:])
+    parsed_args, _ = parser.parse_known_args(sys.argv[1:])
 
     align_yaw = parsed_args.yaw is not None
     via_track = parsed_args.via_track
@@ -122,6 +153,16 @@ def main(args=None):
         user_id=parsed_args.user_id,
         speed_ratio=parsed_args.speed_ratio
     )
+
+    # --- Ctrl+C handler ---
+    def signal_handler(sig, frame):
+        if rclpy.ok():
+            action_client.get_logger().info('Ctrl+C detected, attempting to cancel goal...')
+            action_client.cancel_goal()
+        else:
+            rclpy.shutdown()
+
+    signal.signal(signal.SIGINT, signal_handler)
 
     target_pose = create_pose_stamped(
         action_client,

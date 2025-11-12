@@ -48,7 +48,7 @@ def generate_launch_description():
         output='screen',
         parameters=[params_file],
         arguments=[
-                   '--robot_ip', '192.168.222.1',
+                   '--robot_ip', '192.168.11.1',
                    '--no_head_control',
                    '--ros-args', '--log-level', 'info',
                    ]
