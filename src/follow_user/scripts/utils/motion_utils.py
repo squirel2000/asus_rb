@@ -18,7 +18,7 @@ class MotionUtils:
         payload = {"target": {"x": x, "y": y}, "timeout": timeout}
         headers = {"Content-Type": "application/json"}
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=timeout/1000 + 1)
+            response = requests.post(url, headers=headers, json=payload, timeout=timeout/1000 + 0.1)
             response.raise_for_status()
             return response.json().get("path_points")
         except requests.exceptions.RequestException as e:

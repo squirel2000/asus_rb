@@ -2,6 +2,9 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.task import Future
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Path, Odometry
 import argparse
@@ -31,6 +34,9 @@ class FollowUserMotionNode(Node):
         self.robot_ip = robot_ip
         self.control_head = control_head
 
+        # Use a reentrant callback group to allow for nested service calls and callbacks
+        self.callback_group = ReentrantCallbackGroup()
+
         # Action Server
         self._action_server = ActionServer(
             self,
@@ -40,17 +46,18 @@ class FollowUserMotionNode(Node):
             goal_callback=self.goal_callback,
             handle_accepted_callback=self.handle_accepted_callback,
             cancel_callback=self.cancel_callback,
+            callback_group=self.callback_group,
             )
 
         # Subscribers
-        self.robot_pose_sub = self.create_subscription(PoseStamped, '/robot_pose', self.robot_pose_callback, 10)
-        self.human_relative_pose_sub = self.create_subscription(PoseStamped, '/human_relative_pose_front', self.human_relative_pose_front_callback, 10)
-        self.odom_sub = self.create_subscription(Odometry, '/slamware_ros_sdk_server_node/odom', self.odom_callback, 10)
+        self.robot_pose_sub = self.create_subscription(PoseStamped, '/robot_pose', self.robot_pose_callback, 10, callback_group=self.callback_group)
+        self.human_relative_pose_sub = self.create_subscription(PoseStamped, '/human_relative_pose_front', self.human_relative_pose_front_callback, 10, callback_group=self.callback_group)
+        self.odom_sub = self.create_subscription(Odometry, '/slamware_ros_sdk_server_node/odom', self.odom_callback, 10, callback_group=self.callback_group)
                 
         # Publishers
-        self.cmd_vel_publisher = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.path_publisher = self.create_publisher(Path, '/follow_user/planned_path', 10)
-        self.human_absolute_pose_publisher = self.create_publisher(PoseStamped, '/follow_user/human_absolute_pose', 10)
+        self.cmd_vel_publisher = self.create_publisher(Twist, '/cmd_vel', 10, callback_group=self.callback_group)
+        self.path_publisher = self.create_publisher(Path, '/follow_user/planned_path', 10, callback_group=self.callback_group)
+        self.human_absolute_pose_publisher = self.create_publisher(PoseStamped, '/follow_user/human_absolute_pose', 10, callback_group=self.callback_group)
 
         # TF
         self.tf_buffer = tf2_ros.Buffer()
@@ -71,7 +78,9 @@ class FollowUserMotionNode(Node):
         self.neck_yaw, self.neck_pitch = 0.0, 0.0
         self.human_absolute_pose = None
         self.human_last_update_time = None
+        self.robot_last_update_time = None
         self.current_user_distance = None
+        self.follow_state = ""
 
         # Parameters for pure pursuit
         self.declare_parameter("min_lookahead_dist", 0.5)
@@ -107,6 +116,12 @@ class FollowUserMotionNode(Node):
             f"lost_user_timeout={self.lost_user_timeout:.2f}, "
         )
 
+    async def ros_async_sleep(self, seconds: float):
+        """A ROS-compatible asynchronous sleep function that uses a one-shot timer."""
+        future = Future()
+        self.create_timer(seconds, lambda: future.set_result(None))
+        await future
+
     def odom_callback(self, msg):
         self.current_velocity = msg.twist.twist
 
@@ -115,6 +130,7 @@ class FollowUserMotionNode(Node):
         Update the robot's command velocity based on the current path and human absolute pose.
         """
         self.robot_pose = msg  
+        self.robot_last_update_time = self.get_clock().now()
 
         # If no active goal, nothing to do
         if not getattr(self._active_goal_handle, 'is_active', False):
@@ -124,20 +140,16 @@ class FollowUserMotionNode(Node):
         _human_updated = (self.human_last_update_time is not None and
                  (self.get_clock().now() - self.human_last_update_time).nanoseconds / 1e9 < self.lost_user_timeout)
         
-        feedback_msg = FollowUser.Feedback()
-        feedback_msg.current_pose = self.robot_pose
-
         if _human_updated:
             if self.current_user_distance < self.lagging_dist_thres:
-                feedback_msg.status = "FOLLOWING_USER"
+                self.follow_state = "FOLLOWING_USER"
             else:
-                feedback_msg.status = "LAGGING_BEHIND_USER"
+                self.follow_state = "LAGGING_BEHIND_USER"
         else:
-            feedback_msg.status = "LOST_USER"
+            self.follow_state = "LOST_USER"
             self.get_logger().warn("LOST_USER: No relative pose update recently")
 
         if self.human_absolute_pose:
-            feedback_msg.current_user_distance = self.current_user_distance
             now = self.get_clock().now()
             if (now - self.last_path_search_time).nanoseconds > 0.5 * 1e9:
                 self._update_path(self.human_absolute_pose)
@@ -149,11 +161,11 @@ class FollowUserMotionNode(Node):
             # self.get_logger().info(f"Following path. Vel: {cmd_vel.linear.x:.2f}, Ang: {cmd_vel.angular.z:.2f}, human_abs: ({self.human_absolute_pose.pose.position.x:.2f}, {self.human_absolute_pose.pose.position.y:.2f}), last_path_point: ({self.pure_pursuit_controller.path_.poses[-1].pose.position.x:.2f}, {self.pure_pursuit_controller.path_.poses[-1].pose.position.y:.2f})")
             
             # Update head tracking
-            self._update_head_tracking(self.robot_pose, self.human_absolute_pose)
-
-        # Publish feedback to action client
-        self._active_goal_handle.publish_feedback(feedback_msg)
-
+            try:
+                self._update_head_tracking(self.robot_pose, self.human_absolute_pose)
+            except Exception:
+                pass
+            
     def human_relative_pose_front_callback(self, msg):
         """
         Apply the shrinking in 3D (x, y, z): move the target point closer to the camera by `FOLLOW_USER_OFFSET`
@@ -303,7 +315,7 @@ class FollowUserMotionNode(Node):
         self.get_logger().info('Goal accepted, starting execution.')
         goal_handle.execute()
 
-    def cancel_callback(self, goal_handle):
+    async def cancel_callback(self, goal_handle):
         """Accept or reject a client request to cancel an action."""
         self.get_logger().info('Received cancel request.')
         return CancelResponse.ACCEPT
@@ -317,14 +329,21 @@ class FollowUserMotionNode(Node):
         try:
             while rclpy.ok() and goal_handle.is_active:
                 
-                # Quick checks & feedback
-                feedback_msg = FollowUser.Feedback(status="CHECKING_EXECUTION_STATUS")
-                if not self.robot_pose:
+                feedback_msg = FollowUser.Feedback()
+                # Quick checks
+                _robot_updated = (self.robot_last_update_time and
+                                (self.get_clock().now() - self.robot_last_update_time).nanoseconds / 1e9 < 0.2)
+
+                if not _robot_updated:
+                    self.follow_state = "WAITING_ROBOT_POSE"
                     self.get_logger().warn("Robot pose is unavailable. Please check the connection with the AMR.")
-                    goal_handle.publish_feedback(feedback_msg)
+                else:
+                    feedback_msg.current_pose = self.robot_pose
+
                 if not self.human_last_update_time:
                     self.get_logger().warn("Human pose is unavailable. Please check the CV service.")
-                    goal_handle.publish_feedback(feedback_msg)
+                else:
+                    feedback_msg.current_user_distance = self.current_user_distance
 
                 # Check for cancel request
                 if goal_handle.is_cancel_requested:
@@ -339,7 +358,10 @@ class FollowUserMotionNode(Node):
 
                     return FollowUser.Result(message='Goal canceled by the client.')
 
-                rclpy.spin_once(self, timeout_sec=0.1)
+                feedback_msg.status = self.follow_state
+                goal_handle.publish_feedback(feedback_msg)
+
+                await self.ros_async_sleep(0.1)
 
             # If the loop exits because the goal is no longer active (but not cancelled), succeed it.
             goal_handle.succeed()
@@ -369,11 +391,14 @@ def main(args=None):
     args, _ = parser.parse_known_args()
     
     node = FollowUserMotionNode(robot_ip=args.robot_ip, control_head=not args.no_head_control)
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
+        executor.shutdown()
         node.destroy_node()
         rclpy.shutdown()
 
