@@ -61,6 +61,8 @@ class FollowUserMotionNode(Node):
         if self.control_head:
             self.head_controller = HeadController(self.get_logger())
             self.head_controller.start_listening()
+            # Get firmware version to update the current neck angles automatically
+            self.head_controller.get_firmware_version(timeout=3)
 
         # State
         self._active_goal_handle = None

@@ -1,5 +1,6 @@
 import serial
 import math
+import numpy as np
 import argparse
 import time
 import threading
@@ -318,6 +319,7 @@ if __name__ == "__main__":
         log("\n--- Sending Head Control Command ---")
         head_controller.control_head(args.yaw, args.pitch, args.duration, logging=True)
         log("-" * 60)
+        time.sleep(args.duration / 1000 + 1.0)  # 1.0s: Wait for the head to reach the position
 
         log(f"\n--- Monitoring Neck Positions for {args.monitor_duration} seconds (1 Hz) ---")
         for i in range(args.monitor_duration):
@@ -325,6 +327,9 @@ if __name__ == "__main__":
                 log("Connection to device lost. Stopping monitor.")
                 break
             log(f"  Time {i+1}s: Current Neck Yaw={head_controller.current_neck_yaw_deg:.1f} deg, Pitch={head_controller.current_neck_pitch_deg:.1f} deg")
+            yaw_angle_deg = args.yaw + np.random.uniform(YAW_MIN, YAW_MAX)
+            pitch_angle_deg = args.pitch + np.random.uniform(PITCH_MIN, PITCH_MAX)
+            head_controller.control_head(args.yaw, args.pitch, args.duration, logging=True)
             time.sleep(1)
         log("-" * 60)
 

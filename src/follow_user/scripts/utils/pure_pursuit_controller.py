@@ -68,43 +68,48 @@ class PurePursuitController:
         # Calculate the heading error
         heading_error = angles.normalize_angle(angle_to_carrot_global - robot_yaw)
         
-        # Implement smooth, scaled turning
-        speed_scale = 1.0
-        if abs(heading_error) > self.heading_error_for_pure_rotation_:
-            speed_scale = 0.0  # Error is too large, pure rotation
-        elif abs(heading_error) > self.min_heading_error_for_motion_:
-            speed_scale = (self.heading_error_for_pure_rotation_ - abs(heading_error)) / \
-                          (self.heading_error_for_pure_rotation_ - self.min_heading_error_for_motion_)
-
-        if dist_to_goal > self.approach_velocity_scaling_dist_:
-            goal_approach_target_vel = self.max_linear_vel_
-        elif dist_to_goal > self.goal_dist_buf_:
-            range_ = self.approach_velocity_scaling_dist_ - self.goal_dist_buf_
-            scale = (dist_to_goal - self.goal_dist_buf_) / max(range_, 1e-4)
-            goal_approach_target_vel = self.min_approach_linear_velocity_ + scale * (self.max_linear_vel_ - self.min_approach_linear_velocity_)
-        elif dist_to_goal > self.goal_dist_tol_:
-            final_crawl_vel = 0.025
-            range_ = self.goal_dist_buf_ - self.goal_dist_tol_
-            scale = (dist_to_goal - self.goal_dist_tol_) / max(range_, 1e-4)
-            goal_approach_target_vel = final_crawl_vel + scale * (self.min_approach_linear_velocity_ - final_crawl_vel)
+        # Define the distance at which linear motion stops, and only rotation occurs.
+        FINAL_APPROACH_DIST = 0.75
+ 
+        if dist_to_goal < FINAL_APPROACH_DIST:
+            target_vel_lin_x = 0.0
+           
+            # Use proportional control for smooth and responsive rotation.
+            P_GAIN = 3.0  # Proportional gain for rotation
+            rotation_speed = P_GAIN * abs(heading_error)
+            target_vel_ang_z = np.sign(heading_error) * np.clip(rotation_speed, 0.0, self.max_angular_vel_)
         else:
-            final_crawl_vel = 0.025
-            range_ = self.goal_dist_tol_
-            scale = dist_to_goal / max(range_, 1e-4)
-            goal_approach_target_vel = scale * final_crawl_vel
-
-        goal_approach_target_vel = np.clip(goal_approach_target_vel, 0.0, self.max_linear_vel_)
-        target_vel_lin_x = goal_approach_target_vel * speed_scale
-        
-        # Pure pursuit logic for angular velocity
-        pure_rotation_w = np.sign(heading_error) * 0.7 * self.max_angular_vel_
-        lookahead_dist_for_curve = math.hypot(lookahead_point.x - robot_pose.pose.position.x,
-                                              lookahead_point.y - robot_pose.pose.position.y)
-        lookahead_dist_for_curve = max(lookahead_dist_for_curve, 0.01)
-
-        pure_pursuit_curvature = 2.0 * math.sin(heading_error) / lookahead_dist_for_curve
-        pure_pursuit_w = target_vel_lin_x * pure_pursuit_curvature
-        target_vel_ang_z = (1.0 - speed_scale) * pure_rotation_w + speed_scale * pure_pursuit_w
+            # Implement smooth, scaled turning based on heading error
+            speed_scale = 1.0
+            if abs(heading_error) > self.heading_error_for_pure_rotation_:
+                speed_scale = 0.0  # Error is too large, pure rotation
+            elif abs(heading_error) > self.min_heading_error_for_motion_:
+                speed_scale = (self.heading_error_for_pure_rotation_ - abs(heading_error)) / \
+                              (self.heading_error_for_pure_rotation_ - self.min_heading_error_for_motion_)
+ 
+            # Robust linear velocity scaling for goal approach
+            if dist_to_goal < self.approach_velocity_scaling_dist_:
+                scaling_factor = (dist_to_goal - FINAL_APPROACH_DIST) / (self.approach_velocity_scaling_dist_ - FINAL_APPROACH_DIST)
+                goal_approach_target_vel = self.min_approach_linear_velocity_ + \
+                                           (self.max_linear_vel_ - self.min_approach_linear_velocity_) * scaling_factor
+            else:
+                goal_approach_target_vel = self.max_linear_vel_
+ 
+            goal_approach_target_vel = np.clip(goal_approach_target_vel, self.min_approach_linear_velocity_, self.max_linear_vel_)
+            target_vel_lin_x = goal_approach_target_vel * speed_scale
+           
+            # Pure pursuit logic for angular velocity
+            P_GAIN_ROT = 2.5
+            pure_rotation_speed = P_GAIN_ROT * abs(heading_error)
+            pure_rotation_w = np.sign(heading_error) * np.clip(pure_rotation_speed, 0.0, self.max_angular_vel_)
+ 
+            lookahead_dist_for_curve = math.hypot(lookahead_point.x - robot_pose.pose.position.x,
+                                                  lookahead_point.y - robot_pose.pose.position.y)
+            lookahead_dist_for_curve = max(lookahead_dist_for_curve, 0.01)
+ 
+            pure_pursuit_curvature = 2.0 * math.sin(heading_error) / lookahead_dist_for_curve
+            pure_pursuit_w = target_vel_lin_x * pure_pursuit_curvature
+            target_vel_ang_z = (1.0 - speed_scale) * pure_rotation_w + speed_scale * pure_pursuit_w
         
         cmd_vel = self._rectify_velocity(target_vel_lin_x, target_vel_ang_z, current_velocity)
         
