@@ -18,6 +18,7 @@ from copy import deepcopy
 CAMERA_OFFSET = np.array([0.0, 0.0, 0.0]) # Camera position (x,y,z) in base_link frame
 FOLLOW_USER_OFFSET = 0.25 # Move the target point closer to avoid path not found issues
 STATIC_NECK_ANGLE = 0.0
+STATIC_NECK_PITCH_DEG = 20.0  # Fixed neck pitch angle to face horizontally
 
 class FollowUserMotionNode(Node):
     """
@@ -187,6 +188,7 @@ class FollowUserMotionNode(Node):
     def _update_human_absolute_pose(self, human_relative_pose_offset):
         """
         Update the human's absolute pose based on the human relative pose from the front camera.
+        Note: Fix the neck pitch angle to STATIC_NECK_PITCH_DEG (20 degrees) to face horizontally.
         """
         try:
             if not self.robot_pose: return
@@ -201,15 +203,15 @@ class FollowUserMotionNode(Node):
             self.neck_yaw = math.radians(self.head_controller.current_neck_yaw_deg) if self.control_head else STATIC_NECK_ANGLE
             self.neck_pitch = math.radians(self.head_controller.current_neck_pitch_deg) if self.control_head else STATIC_NECK_ANGLE
 
-            # Rotation around Y-axis (pitch)
-            x_p = x_cam * math.cos(self.neck_pitch) + z_cam * math.sin(self.neck_pitch)
-            y_p = y_cam
-            z_p = -x_cam * math.sin(self.neck_pitch) + z_cam * math.cos(self.neck_pitch)
+            # # Rotation around Y-axis (pitch) - commented out to keep fixed pitch
+            # x_p = x_cam * math.cos(self.neck_pitch) + z_cam * math.sin(self.neck_pitch)
+            # y_p = y_cam
+            # z_p = -x_cam * math.sin(self.neck_pitch) + z_cam * math.cos(self.neck_pitch)
 
-            # Rotation around Z-axis (yaw)
-            x_b = x_p * math.cos(self.neck_yaw) - y_p * math.sin(self.neck_yaw)
-            y_b = x_p * math.sin(self.neck_yaw) + y_p * math.cos(self.neck_yaw)
-            z_b = z_p
+            # Rotation around Z-axis (yaw) - Replace x_p, y_p, z_p with x_cam, y_cam, z_cam
+            x_b = x_cam * math.cos(self.neck_yaw) - y_cam * math.sin(self.neck_yaw)
+            y_b = x_cam * math.sin(self.neck_yaw) + y_cam * math.cos(self.neck_yaw)
+            z_b = z_cam
 
             # Manually transform from base_link to the map frame
             robot_yaw = self._get_yaw_from_quaternion(self.robot_pose.pose.orientation)
@@ -283,7 +285,8 @@ class FollowUserMotionNode(Node):
 
         # Calculate yaw and pitch in radians relative to the robot's base_link frame
         yaw = math.atan2(y_base, x_base)
-        pitch = math.atan2(-z_base, math.sqrt(x_base**2 + y_base**2))
+        # Replace "pitch = math.atan2(-z_base, math.sqrt(x_base**2 + y_base**2))" with fixed pitch angle
+        pitch  = math.radians(STATIC_NECK_PITCH_DEG)  # Use fixed pitch angle
 
         # Convert to degrees for the head controller
         yaw_deg = math.degrees(yaw)
