@@ -14,7 +14,7 @@ The `task_coordinator_node` is the central node in this package. It provides an 
 
     An action server for navigation tasks. The goal is a `PoseStamped` message.
 
-*   **`/follow_user_task`** ([`follow_user/action/FollowUser`](../follow_user/action/FollowUser.action))
+*   **`/follow_user_task`** ([`motion_common/action/FollowUser`](../motion_common/action/FollowUser.action))
 
     An action server for follow-user tasks. The goal is a `user_id`.
 

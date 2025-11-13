@@ -5,7 +5,7 @@ from rclpy.node import Node
 from rclpy.action import ActionClient
 from geometry_msgs.msg import PoseStamped
 from task_coordinator.action import Task
-from follow_user.action import FollowUser
+from motion_common.action import FollowUser
 
 class TaskClientNode(Node):
     def __init__(self, args):

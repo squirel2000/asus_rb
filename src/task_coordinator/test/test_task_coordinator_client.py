@@ -4,7 +4,7 @@ from rclpy.node import Node
 from rclpy.action import ActionClient
 from geometry_msgs.msg import PoseStamped, Pose, Point, Quaternion
 from std_srvs.srv import SetBool
-from follow_user.action import FollowUser
+from motion_common.action import FollowUser
 from navigation.action import Navigate
 import time
 

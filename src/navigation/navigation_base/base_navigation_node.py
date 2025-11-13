@@ -7,7 +7,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.task import Future
 from geometry_msgs.msg import PoseStamped
 from perception_control_manager.srv import SetMaxSpeed
-from slamware_ros_sdk.msg import MoveToRequest, CancelActionRequest, GoHomeRequest, RobotBasicState
+from slamware_ros_sdk.msg import MoveToRequest, CancelActionRequest, GoHomeRequest, RobotBasicState, MoveOptionFlag
 from tf_transformations import euler_from_quaternion
 from std_msgs.msg import Float32MultiArray, String
 from nav_msgs.msg import Path
@@ -116,7 +116,7 @@ class BaseNavigationNode(Node):
         self.amr_basic_state = msg
         self.get_logger().debug(f"AMR's basic state : {self.amr_basic_state}")
 
-    def publish_move_to(self, pose: PoseStamped, speed_ratio: float, with_yaw=True):
+    def publish_move_to(self, pose: PoseStamped, speed_ratio: float, with_yaw=True, via_track=False):
         """Publish a MoveToRequest message with the given pose."""
 
         if pose.pose.position.z == 99.99:
@@ -136,16 +136,19 @@ class BaseNavigationNode(Node):
             )
             _, _, yaw = euler_from_quaternion(quaternion)
             msg.yaw = yaw
+
+            msg.options.opt_flags.flags = MoveOptionFlag.PRECISE
             if with_yaw:
-                msg.options.opt_flags.flags = 48  # 16+32, MoveOptionFlag: [16:'PRECISE', 32:'WITH_YAW']
-            else:
-                msg.options.opt_flags.flags = 16
+                msg.options.opt_flags.flags += MoveOptionFlag.WITH_YAW
+            if via_track:
+                msg.options.opt_flags.flags += (MoveOptionFlag.KEY_POINTS+MoveOptionFlag.KEY_POINTS_WITH_OA)
+            
             msg.options.speed_ratio.is_valid = True
             msg.options.speed_ratio.value = speed_ratio
             self.publisher_move_to.publish(msg)
             self.get_logger().info(
-                f'Published MoveToRequest: location=(%.2f, %.2f, %.2f), yaw=%.2f, speed_ratio=%.2f' % 
-                (msg.location.x, msg.location.y, msg.location.z, msg.yaw, msg.options.speed_ratio.value)
+                f'Published MoveToRequest: location=(%.2f, %.2f), yaw=%.2f, speed_ratio=%.2f, with_yaw:{with_yaw}, via_track:{via_track}' % 
+                (msg.location.x, msg.location.y, msg.yaw, msg.options.speed_ratio.value)
             )
 
     def publish_cancel(self):
@@ -163,7 +166,7 @@ class BaseNavigationNode(Node):
         future = self.set_max_speed_client.call_async(request)
         _last_time = self.get_clock().now()
         while rclpy.ok():
-            if future.done() or (self.get_clock().now() - _last_time).nanoseconds / 1e9 > 10.0:
+            if future.done() or (self.get_clock().now() - _last_time).nanoseconds / 1e9 > timeout:
                 success = future.result().success if future.result() else False
                 break
             self.get_logger().warn("waiting set_max_speed service result.")
