@@ -15,7 +15,6 @@ from datetime import datetime
 # Constants
 SERIAL_PORT = "/dev/ttyACM0"
 BAUDRATE = 115200
-ALPHA = 0.1  # Smoothing factor for low-pass filter (applies to degrees)
 # Yaw and pitch limits (in degrees)
 YAW_MIN, YAW_MAX = -45.0, 45.0
 PITCH_MIN, PITCH_MAX = -15.0, 55.0
@@ -149,12 +148,11 @@ class HeadController:
 
             self._parse_feedback_payload(packet)
 
-    def control_head(self, yaw_deg, pitch_deg, duration_ms=50, logging=False):
-        self.smoothed_yaw = ALPHA * yaw_deg + (1 - ALPHA) * self.smoothed_yaw
-        self.smoothed_pitch = ALPHA * pitch_deg + (1 - ALPHA) * self.smoothed_pitch
-        
-        final_yaw_deg = max(YAW_MIN, min(YAW_MAX, self.smoothed_yaw))
-        final_pitch_deg = max(PITCH_MIN, min(PITCH_MAX, self.smoothed_pitch))
+    def control_head(self, yaw_deg, pitch_deg, duration_ms=300, logging=False):
+        """Send command to control the head's yaw and pitch angles in degrees.
+        """        
+        final_yaw_deg = max(YAW_MIN, min(YAW_MAX, yaw_deg))
+        final_pitch_deg = max(PITCH_MIN, min(PITCH_MAX, pitch_deg))
 
         cmd = self.build_neck_position_command(final_yaw_deg, final_pitch_deg, duration_ms)
         if self.serial_port and self.serial_port.is_open:
@@ -293,7 +291,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Control the robot's head and get firmware version.")
     parser.add_argument("--yaw", type=float, default=0.0, help="Yaw angle in degrees for head control.")
     parser.add_argument("--pitch", type=float, default=0.0, help="Pitch angle in degrees for head control.")
-    parser.add_argument("--duration", type=int, default=1000, help="Duration in milliseconds for head control.")
+    parser.add_argument("--duration", type=int, default=2000, help="Duration in milliseconds for head control.")
     parser.add_argument("--monitor-duration", type=int, default=10, 
                         help="Duration in seconds to monitor head position after command.")
     args = parser.parse_args()
@@ -328,11 +326,15 @@ if __name__ == "__main__":
                 break
             log(f"  Time {i+1}s: Current Neck Yaw={head_controller.current_neck_yaw_deg:.1f} deg, Pitch={head_controller.current_neck_pitch_deg:.1f} deg")
             yaw_angle_deg = args.yaw + np.random.uniform(YAW_MIN, YAW_MAX)
-            pitch_angle_deg = args.pitch + np.random.uniform(PITCH_MIN, PITCH_MAX)
-            head_controller.control_head(args.yaw, args.pitch, args.duration, logging=True)
+            pitch_angle_deg = 20.0  # pitch_angle_deg = args.pitch + np.random.uniform(PITCH_MIN, PITCH_MAX)
+            head_controller.control_head(yaw_angle_deg, pitch_angle_deg, args.duration, logging=True)
             time.sleep(1)
         log("-" * 60)
 
+        # Return head to neutral position
+        log("\n--- Returning Head to Neutral Position (0.0 deg, 20.0 deg) ---")
+        head_controller.control_head(0.0, 20.0, args.duration, logging=True)
+        
         head_controller.destroy()
     else:
         log("Exiting due to serial port not being available.")

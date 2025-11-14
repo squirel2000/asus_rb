@@ -18,7 +18,7 @@ from copy import deepcopy
 CAMERA_OFFSET = np.array([0.0, 0.0, 0.0]) # Camera position (x,y,z) in base_link frame
 FOLLOW_USER_OFFSET = 0.25 # Move the target point closer to avoid path not found issues
 STATIC_NECK_ANGLE = 0.0
-STATIC_NECK_PITCH_DEG = 20.0  # Fixed neck pitch angle to face horizontally
+STATIC_NECK_PITCH_DEG = 15.0  # Fixed neck pitch angle to face horizontally
 
 class FollowUserMotionNode(Node):
     """
@@ -62,7 +62,7 @@ class FollowUserMotionNode(Node):
         if self.control_head:
             self.head_controller = HeadController(self.get_logger())
             self.head_controller.start_listening()
-            # Get firmware version to update the current neck angles automatically
+            # Use get_firmware_version to activate the automatic update for the neck angles
             self.head_controller.get_firmware_version(timeout=3)
 
         # State

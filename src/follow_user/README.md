@@ -12,7 +12,7 @@ Before launching, ensure all necessary packages are built:
 
 ```bash
 # Build all required packages and source the setup file
-colcon build --packages-select follow_user task_coordinator && source install/setup.bash
+colcon build --packages-select follow_user task_coordinator motion_common && source install/setup.bash
 ```
 
 ### Launching the System
