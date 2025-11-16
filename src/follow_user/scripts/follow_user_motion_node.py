@@ -295,16 +295,13 @@ class FollowUserMotionNode(Node):
             base_angular_vel_rps = self.current_velocity.angular.z
 
             # Calculate desired neck velocities using the new tracker
-            yaw_vel_dps, _ = self.head_tracker.calculate_velocities(
+            yaw_vel_dps, pitch_vel_dps = self.head_tracker.calculate_velocities(
                 target_yaw_rad=target_yaw_rad,
                 target_dist=distance,
                 current_neck_yaw_rad=current_neck_yaw_rad,
                 current_neck_yaw_vel_rps=current_neck_yaw_vel_rps,
-                base_angular_vel_rps=base_angular_vel_rps
-            )
-
-            pitch_vel_dps = self.head_tracker.calculate_pitch_velocity(
-                current_pitch_rad=current_neck_pitch_rad
+                base_angular_vel_rps=base_angular_vel_rps,
+                current_neck_pitch_rad=current_neck_pitch_rad
             )
 
             self.get_logger().info(

@@ -12,7 +12,11 @@ class HeadTracker:
         
         # Pitch control parameters
         self.STATIC_NECK_PITCH_DEG = 15.0
-        self.PITCH_KP = 2.0 # Proportional gain for pitch position control
+        self.PITCH_TOLERANCE_RAD = math.radians(3.0)
+        self.PROFILE_PITCH_SCALE = math.radians(30.0)
+        self.PROFILE_PITCH_GAIN = 1.0
+        self.PROFILE_PITCH_POW = 1.0
+        self.last_pitch_vel_rps = 0.0
 
     def get_long_dist_rotation_suppress_factor(self, cur_person_dist):
         """
@@ -28,8 +32,8 @@ class HeadTracker:
             supress_factor = max(supress_factor, 0.35)
         return supress_factor
 
-    def calculate_velocities(self, target_yaw_rad, target_dist, current_neck_yaw_rad, 
-                               current_neck_yaw_vel_rps, base_angular_vel_rps):
+    def calculate_velocities(self, target_yaw_rad, target_dist, current_neck_yaw_rad,
+                               current_neck_yaw_vel_rps, base_angular_vel_rps, current_neck_pitch_rad):
         """
         Calculates the required neck yaw and pitch velocities to track the user.
         This is a Python migration of the calculateNeckJointSPD method from TrackFollowUser.java.
@@ -40,6 +44,7 @@ class HeadTracker:
             current_neck_yaw_rad (float): The current yaw angle of the neck from encoders.
             current_neck_yaw_vel_rps (float): The current yaw velocity of the neck.
             base_angular_vel_rps (float): The current angular velocity of the robot's base.
+            current_neck_pitch_rad (float): The current pitch angle of the neck from encoders.
 
         Returns:
             tuple: A tuple containing (yaw_velocity_dps, pitch_velocity_dps).
@@ -80,31 +85,27 @@ class HeadTracker:
         # Bounding
         yaw_vel_rad_s = max(-self.MAX_YAW_VEL, min(self.MAX_YAW_VEL, yaw_vel_rad_s))
 
-        # --- Pitch Velocity Calculation (Simple P-controller to hold position) ---
-        # This part is new, as the original Java code used a different logic for pitch.
-        # The goal is to maintain a static pitch angle.
+        # --- Pitch Velocity Calculation (from Java code) ---
         target_pitch_rad = math.radians(self.STATIC_NECK_PITCH_DEG)
-        # We need current_neck_pitch_rad, but it's not passed. Assuming it's available where this is called.
-        # For now, let's return 0 for pitch, and implement it in the main node.
-        pitch_vel_rad_s = 0.0 # Placeholder
+        pitch_error = target_pitch_rad - current_neck_pitch_rad
+        
+        pitch_vel_rad_s = 0.0
+        if abs(pitch_error) > self.PITCH_TOLERANCE_RAD:
+            # Bounded power function for normalized neck joint angle
+            x = min(1.0, max(0.0, abs(pitch_error) / self.PROFILE_PITCH_SCALE))
+            
+            vel = self.PROFILE_PITCH_GAIN * (x ** self.PROFILE_PITCH_POW)
+            vel = min(self.MAX_PITCH_VEL, max(-self.MAX_PITCH_VEL, vel))
+            
+            x = math.copysign(vel, pitch_error)
+            
+            # Low pass filter for smoothing
+            pitch_vel_rad_s = 0.7 * x + 0.3 * self.last_pitch_vel_rps
+        
+        self.last_pitch_vel_rps = pitch_vel_rad_s
 
         # Convert to degrees per second for the controller
         yaw_velocity_dps = math.degrees(yaw_vel_rad_s)
         pitch_velocity_dps = math.degrees(pitch_vel_rad_s)
 
         return yaw_velocity_dps, pitch_velocity_dps
-
-    def calculate_pitch_velocity(self, current_pitch_rad):
-        """
-        Calculates the pitch velocity to maintain a static pitch angle.
-        """
-        target_pitch_rad = math.radians(self.STATIC_NECK_PITCH_DEG)
-        pitch_error = target_pitch_rad - current_pitch_rad
-        
-        # Simple P-controller for pitch
-        pitch_vel_rad_s = self.PITCH_KP * pitch_error
-        
-        # Bound the velocity
-        pitch_vel_rad_s = max(-self.MAX_PITCH_VEL, min(self.MAX_PITCH_VEL, pitch_vel_rad_s))
-        
-        return math.degrees(pitch_vel_rad_s)
