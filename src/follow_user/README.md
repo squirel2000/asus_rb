@@ -19,9 +19,9 @@ colcon build --packages-select follow_user task_coordinator motion_common && sou
 
 The client script handles launching the Slamware driver, RViz, and the chosen follow-user architecture.
 
-__1. Launching the Original Pure Pursuit Architecture (Default)__
+__1. Launching the Pure Pursuit Architecture (Default)__
 
-To launch the original system that uses the `pure_pursuit_controller` algorithm, run the client script without any special flags:
+Run the client script:
 
 ```bash
 # Three main nodes:
@@ -49,7 +49,7 @@ Click the "Publish Point" button in RViz to set a target point for the robot to 
 
   ```bash
   # Debug the new architecture
-  ./src/follow_user/follow_user_client.py -n -d
+  ./src/follow_user/follow_user_client.py -d
   ```
 
 - __Person Simulator__: To automatically simulate a person's movement, use the `-s` or `--simulate-person` flag. 
@@ -76,6 +76,7 @@ ros2 service call /enable_CV vision_srv/srv/SetTask “{task: follow realsense2 
 ### Commit to GitHub with My Account
 
 ```bash
+git add .
 git -c user.name="TingYing Wu" -c user.email="tingying.wu@gmail.com" commit -m "Your commit message"
 ```
 
@@ -100,7 +101,7 @@ Here is a high-level overview of the code and data flow for the follow_user func
     - Upon receiving a point, it calculates a path from the robot's current location to the received point.
     - **Publishes**: A `nav_msgs/Path` message to the `/follow_user/planned_path` topic.
 
-4. **Path Following (`pure_pursuit_controller.cpp`)**
+4. **Path Following (`pure_pursuit_controller.py`)**
     - **Subscribes to**:
         - `/follow_user/planned_path` (`nav_msgs/Path`): To get the path to follow.
         - `/odom` (`nav_msgs/Odometry`): For the robot's current pose and velocity.
