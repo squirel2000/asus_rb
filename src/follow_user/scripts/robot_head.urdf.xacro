@@ -1,0 +1,46 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="asus_robot_head">
+
+  <!-- This file defines the camera attached to the robot's head. -->
+
+  <!-- Define a base_link. This is the root of our robot model. -->
+  <link name="base_link"/>
+
+  <!-- Neck Link -->
+  <!-- This link represents the point of rotation for the head. -->
+  <link name="neck_link"/>
+
+  <!-- Neck Joint -->
+  <!-- This connects the neck to the base_link. It's a fixed joint for TF purposes,
+       as its actual movement is controlled and published by the head_controller. -->
+  <joint name="neck_joint" type="fixed">
+    <parent link="base_link" />
+    <child link="neck_link" />
+    <!-- Position of the neck relative to the base_link, as requested. -->
+    <origin xyz="0 0 1.4" rpy="0 0 0" />
+  </joint>
+
+  <!-- Camera Link -->
+  <!-- This is the physical center of the camera module. -->
+  <link name="front_camera_link"/>
+
+  <!-- Camera Joint -->
+  <!-- This connects the camera to the neck. It's a fixed joint. -->
+  <joint name="front_camera_joint" type="fixed">
+    <parent link="neck_link" />
+    <child link="front_camera_link" />
+    <!-- Adjust these offsets to match the physical camera position relative to the neck's rotation point. -->
+    <origin xyz="0.05 0.0 0.1" rpy="0 0 0" />
+  </joint>
+
+  <!-- Optical Frame Link & Joint -->
+  <!-- This represents the frame in which the vision system publishes its data. -->
+  <link name="front_camera_color_optical_frame"/>
+  <joint name="front_camera_color_optical_joint" type="fixed">
+    <parent link="front_camera_link" />
+    <child link="front_camera_color_optical_frame" />
+    <!-- Per your spec (X-fwd, Y-left, Z-up), this has zero rotation relative to the camera_link. -->
+    <origin xyz="0 0 0" rpy="0 0 0" />
+  </joint>
+
+</robot>

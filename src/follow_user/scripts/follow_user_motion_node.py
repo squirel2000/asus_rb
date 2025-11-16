@@ -187,55 +187,26 @@ class FollowUserMotionNode(Node):
 
     def _update_human_absolute_pose(self, human_relative_pose_offset):
         """
-        Update the human's absolute pose based on the human relative pose from the front camera.
-        Note: Fix the neck pitch angle to STATIC_NECK_PITCH_DEG (20 degrees) to face horizontally.
+        Update the human's absolute pose by transforming the relative pose from the
+        camera's frame to the map frame using TF2. This is the correct, robust way to handle
+        the coordinate transformations and avoids feedback-induced oscillations.
         """
         try:
-            if not self.robot_pose: return
-
-            # Create a PoseStamped message for the human in the camera frame
-            human_in_camera_frame = deepcopy(human_relative_pose_offset)
-            x_cam = human_in_camera_frame.pose.position.x
-            y_cam = human_in_camera_frame.pose.position.y
-            z_cam = human_in_camera_frame.pose.position.z
-
-            # Update neck angles from actual encoder feedback to avoid unstable feedback loop
-            self.neck_yaw = math.radians(self.head_controller.current_neck_yaw_deg) if self.control_head else STATIC_NECK_ANGLE
-            self.neck_pitch = math.radians(self.head_controller.current_neck_pitch_deg) if self.control_head else STATIC_NECK_ANGLE
-
-            # # Rotation around Y-axis (pitch) - commented out to keep fixed pitch
-            # x_p = x_cam * math.cos(self.neck_pitch) + z_cam * math.sin(self.neck_pitch)
-            # y_p = y_cam
-            # z_p = -x_cam * math.sin(self.neck_pitch) + z_cam * math.cos(self.neck_pitch)
-
-            # Rotation around Z-axis (yaw) - Replace x_p, y_p, z_p with x_cam, y_cam, z_cam
-            x_b = x_cam * math.cos(self.neck_yaw) - y_cam * math.sin(self.neck_yaw)
-            y_b = x_cam * math.sin(self.neck_yaw) + y_cam * math.cos(self.neck_yaw)
-            z_b = z_cam
-
-            # Manually transform from base_link to the map frame
-            robot_yaw = self._get_yaw_from_quaternion(self.robot_pose.pose.orientation)
-            x_robot = self.robot_pose.pose.position.x
-            y_robot = self.robot_pose.pose.position.y
-
-            x_map = x_robot + (x_b * math.cos(robot_yaw) - y_b * math.sin(robot_yaw))
-            y_map = y_robot + (x_b * math.sin(robot_yaw) + y_b * math.cos(robot_yaw))
-            
-            # Create the absolute pose message
-            self.human_absolute_pose = PoseStamped()
-            self.human_absolute_pose.header.frame_id = 'slamware_map'
-            self.human_absolute_pose.header.stamp = self.get_clock().now().to_msg()
-            self.human_absolute_pose.pose.position.x = x_map
-            self.human_absolute_pose.pose.position.y = y_map
-            self.human_absolute_pose.pose.position.z = self.robot_pose.pose.position.z + z_b # Approximate height
-            self.human_absolute_pose.pose.orientation = self.robot_pose.pose.orientation # Orientation is not critical here
-            
+            # The vision node should publish the relative pose with the frame_id
+            # 'front_camera_color_optical_frame'.
+            # We want to transform it to the 'slamware_map' frame.
+            # TF2 will handle all intermediate transforms (camera -> neck -> base_link -> odom -> map)
+            # using the timestamp from the human pose message, which prevents the feedback loop.
+            self.human_absolute_pose = self.tf_buffer.transform(
+                human_relative_pose_offset,
+                'slamware_map',
+                timeout=rclpy.duration.Duration(seconds=0.1) # Short timeout
+            )
             self.human_absolute_pose_publisher.publish(self.human_absolute_pose)
 
-        except Exception as e:
-            self.get_logger().error(f'Could not calculate human absolute pose: {e}')
+        except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException) as e:
+            self.get_logger().error(f'Could not transform human pose to map frame: {e}')
             self.human_absolute_pose = None
-            return
 
     def _get_yaw_from_quaternion(self, q):
         # Conversion from quaternion to yaw (rotation around z-axis)
