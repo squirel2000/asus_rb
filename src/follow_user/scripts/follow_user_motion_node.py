@@ -12,16 +12,15 @@ import math
 import numpy as np
 import tf2_ros
 from utils.head_control import HeadController
+from utils.head_tracker import HeadTracker
 from utils.motion_utils import MotionUtils
 from utils.pure_pursuit_controller import PurePursuitController
 from motion_common.action import FollowUser
 from copy import deepcopy
 
 # Constants
-CAMERA_OFFSET = np.array([0.0, 0.0, 0.0]) # Camera position (x,y,z) in base_link frame
 FOLLOW_USER_OFFSET = 0.25 # Move the target point closer to avoid path not found issues
 STATIC_NECK_ANGLE = 0.0
-STATIC_NECK_PITCH_DEG = 15.0  # Fixed neck pitch angle to face horizontally
 
 class FollowUserMotionNode(Node):
     """
@@ -109,6 +108,7 @@ class FollowUserMotionNode(Node):
         # Utility classes
         self.motion_utils = MotionUtils(self)
         self.pure_pursuit_controller = PurePursuitController(self)
+        self.head_tracker = HeadTracker(self.get_logger())
 
         self.get_logger().info('Follow User Motion Node has been started.')
         
@@ -284,7 +284,7 @@ class FollowUserMotionNode(Node):
         dz = human_absolute_pose.pose.position.z - robot_pose.pose.position.z
 
         # Distance to the human
-        distance = math.sqrt(dx**2 + dy**2 + dz**2)
+        distance = math.sqrt(dx**2 + dy**2) # Use 2D distance for yaw tracking logic
 
         # Get robot's yaw
         robot_yaw = self._get_yaw_from_quaternion(robot_pose.pose.orientation)
@@ -293,20 +293,36 @@ class FollowUserMotionNode(Node):
         # we rotate it by the inverse of the robot's yaw.
         x_base = dx * math.cos(-robot_yaw) - dy * math.sin(-robot_yaw)
         y_base = dx * math.sin(-robot_yaw) + dy * math.cos(-robot_yaw)
-        z_base = dz
 
-        # Calculate yaw and pitch in radians relative to the robot's base_link frame
-        yaw = math.atan2(y_base, x_base)
-        # Replace "pitch = math.atan2(-z_base, math.sqrt(x_base**2 + y_base**2))" with fixed pitch angle
-        pitch  = math.radians(STATIC_NECK_PITCH_DEG)  # Use fixed pitch angle
+        # Calculate target yaw in radians relative to the robot's base_link frame
+        target_yaw_rad = math.atan2(y_base, x_base)
 
-        # Convert to degrees for the head controller
-        yaw_deg = math.degrees(yaw)
-        pitch_deg = math.degrees(pitch)
-
-        self.get_logger().info(f"Head tracking: ({math.degrees(self.neck_yaw)}°, {math.degrees(self.neck_pitch)}°) -> ({yaw_deg:.2f}°, {pitch_deg:.2f}°), Dist: {distance:.2f}m")
         if self.control_head and self.head_controller:
-            self.head_controller.control_head(yaw_deg, pitch_deg)
+            # Get current state from head_controller
+            current_neck_yaw_rad = math.radians(self.head_controller.current_neck_yaw_deg)
+            current_neck_pitch_rad = math.radians(self.head_controller.current_neck_pitch_deg)
+            current_neck_yaw_vel_rps = math.radians(self.head_controller.current_neck_yaw_vel_dps)
+            base_angular_vel_rps = self.current_velocity.angular.z
+
+            # Calculate desired neck velocities using the new tracker
+            yaw_vel_dps, pitch_vel_dps = self.head_tracker.calculate_velocities(
+                target_yaw_rad=target_yaw_rad,
+                target_dist=distance,
+                current_neck_yaw_rad=current_neck_yaw_rad,
+                current_neck_yaw_vel_rps=current_neck_yaw_vel_rps,
+                base_angular_vel_rps=base_angular_vel_rps,
+                current_neck_pitch_rad=current_neck_pitch_rad
+            )
+
+            self.get_logger().info(
+                f"Head tracking: TargetYaw: {math.degrees(target_yaw_rad):.1f}°, "
+                f"CurrentYaw: {math.degrees(current_neck_yaw_rad):.1f}°, "
+                f"Dist: {distance:.2f}m | "
+                f"Vels (dps): Yaw={yaw_vel_dps:.2f}, Pitch={pitch_vel_dps:.2f}"
+            )
+
+            # Send velocity command to head
+            self.head_controller.control_head_velocity(yaw_vel_dps, pitch_vel_dps)
 
     # ---------- ActionServer callbacks ----------
     def goal_callback(self, goal_request):
