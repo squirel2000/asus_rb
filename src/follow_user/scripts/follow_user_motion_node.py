@@ -3,7 +3,8 @@ import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from geometry_msgs.msg import PoseStamped, Twist
-from nav_msgs.msg import Path, Odometry
+from nav_msgs.msg import Odometry
+from sensor_msgs.msg import LaserScan
 import argparse
 import math
 import numpy as np
@@ -11,9 +12,10 @@ import tf2_ros
 from utils.head_control import HeadController
 from utils.head_tracker import HeadTracker
 from utils.motion_utils import MotionUtils
-from utils.pure_pursuit_controller import PurePursuitController
 from motion_common.action import FollowUser
 from copy import deepcopy
+
+from utils.dwa_local_planner import DWAPlanner
 
 # Constants
 CAMERA_OFFSET = np.array([0.0, 0.0, 0.0]) # Camera position (x,y,z) in base_link frame
@@ -42,16 +44,16 @@ class FollowUserMotionNode(Node):
             goal_callback=self.goal_callback,
             handle_accepted_callback=self.handle_accepted_callback,
             cancel_callback=self.cancel_callback,
-            )
+        )
 
         # Subscribers
         self.robot_pose_sub = self.create_subscription(PoseStamped, '/robot_pose', self.robot_pose_callback, 10)
         self.human_relative_pose_sub = self.create_subscription(PoseStamped, '/human_relative_pose_front', self.human_relative_pose_front_callback, 10)
         self.odom_sub = self.create_subscription(Odometry, '/slamware_ros_sdk_server_node/odom', self.odom_callback, 10)
-                
+        self.scan_sub = self.create_subscription(LaserScan, '/slamware_ros_sdk_server_node/scan', self.scan_callback, 30)
+
         # Publishers
         self.cmd_vel_publisher = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.path_publisher = self.create_publisher(Path, '/follow_user/planned_path', 10)
         self.human_absolute_pose_publisher = self.create_publisher(PoseStamped, '/follow_user/human_absolute_pose', 10)
 
         # TF
@@ -70,14 +72,13 @@ class FollowUserMotionNode(Node):
         self._active_goal_handle = None
         self.robot_pose = None
         self.current_velocity = Twist()
-        self.path_msg = None
         self.last_path_search_time = self.get_clock().now()
         self.neck_yaw, self.neck_pitch = 0.0, 0.0
         self.human_absolute_pose = None
         self.human_last_update_time = None
         self.current_user_distance = None
 
-        # Parameters for pure pursuit
+        # Parameters for planner and control
         self.declare_parameter("min_lookahead_dist", 0.5)
         self.declare_parameter("max_lookahead_dist", 1.5)
         self.declare_parameter("lookahead_time", 1.5)
@@ -92,34 +93,36 @@ class FollowUserMotionNode(Node):
         self.declare_parameter("approach_velocity_scaling_dist", 0.6)
         self.declare_parameter("goal_dist_buf", 0.15)
         self.declare_parameter("goal_dist_tol", 0.075)
-
         self.declare_parameter("lagging_dist_thres", 1.5)
         self.declare_parameter("lost_user_timeout", 0.5)
+
         self.lagging_dist_thres = self.get_parameter("lagging_dist_thres").get_parameter_value().double_value
         self.lost_user_timeout = self.get_parameter("lost_user_timeout").get_parameter_value().double_value
 
         # Utility classes
         self.motion_utils = MotionUtils(self)
-        self.pure_pursuit_controller = PurePursuitController(self)
         self.head_tracker = HeadTracker(self.get_logger())
 
+        # DWA planner
+        self.dwa_planner = DWAPlanner(self)
+
+        # Scan storage
+        self.latest_scan = None
+
         self.get_logger().info('Follow User Motion Node has been started.')
-        
         self.get_logger().info(
-            f"Parameters: "
-            f"control_head={self.control_head}, "
-            f"lagging_dist_thres={self.lagging_dist_thres:.2f}, "
-            f"lost_user_timeout={self.lost_user_timeout:.2f}, "
+            f"Parameters: control_head={self.control_head}, lagging_dist_thres={self.lagging_dist_thres:.2f}, lost_user_timeout={self.lost_user_timeout:.2f}"
         )
 
+    def scan_callback(self, msg):
+        self.latest_scan = msg
+
     def odom_callback(self, msg):
+        # store current twist (Twist) for the planner
         self.current_velocity = msg.twist.twist
 
     def robot_pose_callback(self, msg):
-        """ 
-        Update the robot's command velocity based on the current path and human absolute pose.
-        """
-        self.robot_pose = msg  
+        self.robot_pose = msg
 
         # If no active goal, nothing to do
         if not getattr(self._active_goal_handle, 'is_active', False):
@@ -128,7 +131,7 @@ class FollowUserMotionNode(Node):
         # Determine status
         _human_updated = (self.human_last_update_time is not None and
                  (self.get_clock().now() - self.human_last_update_time).nanoseconds / 1e9 < self.lost_user_timeout)
-        
+
         feedback_msg = FollowUser.Feedback()
         feedback_msg.current_pose = self.robot_pose
 
@@ -141,18 +144,23 @@ class FollowUserMotionNode(Node):
             feedback_msg.status = "LOST_USER"
             self.get_logger().warn("LOST_USER: No relative pose update recently")
 
-        if self.human_absolute_pose:
+        if self.human_absolute_pose and self.latest_scan is not None:
             feedback_msg.current_user_distance = self.current_user_distance
-            now = self.get_clock().now()
-            if (now - self.last_path_search_time).nanoseconds > 0.5 * 1e9:
-                self._update_path(self.human_absolute_pose)
-                self.last_path_search_time = now
-            
-            cmd_vel = self.pure_pursuit_controller.compute_velocity_commands(self.robot_pose, self.current_velocity)
+
+            # Build a local goal from human absolute pose (in map frame)
+            local_goal = PoseStamped()
+            local_goal.header.frame_id = 'slamware_map'
+            local_goal.header.stamp = self.get_clock().now().to_msg()
+            local_goal.pose.position.x = self.human_absolute_pose.pose.position.x
+            local_goal.pose.position.y = self.human_absolute_pose.pose.position.y
+            local_goal.pose.position.z = self.human_absolute_pose.pose.position.z
+            local_goal.pose.orientation = self.human_absolute_pose.pose.orientation
+
+            # compute velocity using DWA planner
+            cmd_vel = self.dwa_planner.compute_velocity_commands(self.robot_pose, self.current_velocity, self.latest_scan, local_goal)
             self.cmd_vel_publisher.publish(cmd_vel)
-            self.get_logger().info(f"Following path. Vel: {cmd_vel.linear.x:.2f}, Ang: {cmd_vel.angular.z:.2f}")
-            # self.get_logger().info(f"Following path. Vel: {cmd_vel.linear.x:.2f}, Ang: {cmd_vel.angular.z:.2f}, human_abs: ({self.human_absolute_pose.pose.position.x:.2f}, {self.human_absolute_pose.pose.position.y:.2f}), last_path_point: ({self.pure_pursuit_controller.path_.poses[-1].pose.position.x:.2f}, {self.pure_pursuit_controller.path_.poses[-1].pose.position.y:.2f})")
-            
+            self.get_logger().info(f"CmdVel -> Lin: {cmd_vel.linear.x:.2f}, Ang: {cmd_vel.angular.z:.2f}")
+
             # Update head tracking
             self._update_head_tracking(self.robot_pose, self.human_absolute_pose)
 
@@ -190,7 +198,7 @@ class FollowUserMotionNode(Node):
     def _update_human_absolute_pose(self, human_relative_pose_offset):
         """
         Update the human's absolute pose based on the human relative pose from the front camera.
-        Note: Fix the neck pitch angle to STATIC_NECK_PITCH_DEG (20 degrees) to face horizontally.
+        Note: Fix the neck pitch angle to STATIC_NECK_PITCH_DEG to face horizontally when head control is disabled.
         """
         try:
             if not self.robot_pose: return
@@ -244,28 +252,6 @@ class FollowUserMotionNode(Node):
         siny_cosp = 2 * (q.w * q.z + q.x * q.y)
         cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
         return math.atan2(siny_cosp, cosy_cosp)
-
-    def _update_path(self, human_absolute_pose):
-        if self.robot_pose is None or human_absolute_pose is None:
-            self.get_logger().warn("Robot or human absolute pose is not available, skipping path update.")
-            return
-
-        try:
-            target_x = human_absolute_pose.pose.position.x
-            target_y = human_absolute_pose.pose.position.y
-            path_points = self.motion_utils.search_path(self.robot_ip, target_x, target_y)
-
-            if path_points:
-                self.path_msg = self.motion_utils.convert_points_to_path(path_points, 'slamware_map')
-                self.pure_pursuit_controller.set_path(self.path_msg)
-                self.path_publisher.publish(self.path_msg)
-                self.get_logger().info(f"Update {len(self.path_msg.poses)}-point path with the last point: ({self.path_msg.poses[-1].pose.position.x:.2f}, {self.path_msg.poses[-1].pose.position.y:.2f})")
-            else:
-                self.pure_pursuit_controller.set_path(None)
-
-        except Exception as e:
-            self.get_logger().error(f'Error in path update: {e}')
-            self.pure_pursuit_controller.set_path(None)
 
     def _update_head_tracking(self, robot_pose, human_absolute_pose):
         # Calculate the vector from robot to human in the map frame
@@ -355,10 +341,9 @@ class FollowUserMotionNode(Node):
                     self._active_goal_handle = None
                     self.get_logger().info('Goal canceled by the client.')
 
-                    # Stop the robot and clear the path
+                    # Stop the robot
                     self.human_absolute_pose = None
                     self.cmd_vel_publisher.publish(Twist())
-                    self.path_publisher.publish(Path())
 
                     return FollowUser.Result(message='Goal canceled by the client.')
 
@@ -375,7 +360,6 @@ class FollowUserMotionNode(Node):
                 self._active_goal_handle = None
                 self.human_absolute_pose = None
                 self.cmd_vel_publisher.publish(Twist())
-                self.path_publisher.publish(Path())
             except Exception:
                 pass
 
@@ -386,11 +370,11 @@ class FollowUserMotionNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    parser = argparse.ArgumentParser(description="Follow user motion node with path planning and head control.")
+    parser = argparse.ArgumentParser(description="Follow user motion node with DWA local planner and head control.")
     parser.add_argument("--robot_ip", default='192.168.11.1', help="The IP address of the robot.")
     parser.add_argument("--no_head_control", action="store_true", help="Disable head control.")
     args, _ = parser.parse_known_args()
-    
+
     node = FollowUserMotionNode(robot_ip=args.robot_ip, control_head=not args.no_head_control)
     try:
         rclpy.spin(node)
