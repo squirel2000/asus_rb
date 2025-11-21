@@ -116,7 +116,7 @@ class BaseNavigationNode(Node):
         self.amr_basic_state = msg
         self.get_logger().debug(f"AMR's basic state : {self.amr_basic_state}")
 
-    def publish_move_to(self, pose: PoseStamped, speed_ratio: float, with_yaw=True, via_track=False):
+    def publish_move_to(self, pose: PoseStamped, speed_ratio: float, with_yaw=True, nav_mode='FREE'):
         """Publish a MoveToRequest message with the given pose."""
 
         if pose.pose.position.z == 99.99:
@@ -140,14 +140,19 @@ class BaseNavigationNode(Node):
             msg.options.opt_flags.flags = MoveOptionFlag.PRECISE
             if with_yaw:
                 msg.options.opt_flags.flags += MoveOptionFlag.WITH_YAW
-            if via_track:
+
+            if nav_mode=='TRACK':
+                msg.options.opt_flags.flags += (MoveOptionFlag.KEY_POINTS)
+            elif nav_mode=='HYBRID':
                 msg.options.opt_flags.flags += (MoveOptionFlag.KEY_POINTS+MoveOptionFlag.KEY_POINTS_WITH_OA)
-            
+            else:
+                nav_mode = 'FREE'
+                
             msg.options.speed_ratio.is_valid = True
             msg.options.speed_ratio.value = speed_ratio
             self.publisher_move_to.publish(msg)
             self.get_logger().info(
-                f'Published MoveToRequest: location=(%.2f, %.2f), yaw=%.2f, speed_ratio=%.2f, with_yaw:{with_yaw}, via_track:{via_track}' % 
+                f'Published MoveToRequest: location=(%.2f, %.2f), yaw=%.2f, speed_ratio=%.2f, with_yaw:{with_yaw}, nav_mode:{nav_mode}' % 
                 (msg.location.x, msg.location.y, msg.yaw, msg.options.speed_ratio.value)
             )
 

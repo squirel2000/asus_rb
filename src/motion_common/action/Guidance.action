@@ -2,7 +2,7 @@
 geometry_msgs/PoseStamped target_pose
 float32 speed_ratio
 bool align_yaw
-bool via_track
+string nav_mode
 string user_id
 ---
 # Result

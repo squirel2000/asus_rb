@@ -47,11 +47,11 @@ def create_pose_stamped(node: Node, x, y, yaw_deg=None):
 
 class GuidanceActionClient(Node):
     """Action client to test the guidance action server."""
-    def __init__(self, align_yaw=False, via_track=False, user_id="test", speed_ratio=1.0):
+    def __init__(self, align_yaw=False, nav_mode='', user_id="test", speed_ratio=1.0):
         super().__init__('guidance_action_client')
         self._action_client = ActionClient(self, Guidance, 'guide_user_to_pose')
         self._align_yaw = align_yaw
-        self._via_track = via_track
+        self._nav_mode = nav_mode
         self._user_id = user_id
         self._speed_ratio = speed_ratio
 
@@ -64,10 +64,10 @@ class GuidanceActionClient(Node):
         goal_msg.speed_ratio = self._speed_ratio
         goal_msg.user_id = self._user_id
         goal_msg.align_yaw = self._align_yaw
-        goal_msg.via_track = self._via_track
+        goal_msg.nav_mode = self._nav_mode
 
         self.get_logger().info(
-            f'Sending goal: align_yaw={self._align_yaw}, via_track={self._via_track}, '
+            f'Sending goal: align_yaw={self._align_yaw}, nav_mode={self._nav_mode}, '
             f'user_id="{self._user_id}", speed_ratio={self._speed_ratio}'
         )
 
@@ -137,19 +137,19 @@ def main(args=None):
     parser.add_argument('x', type=float, nargs='?', default=0.0, help='Target X coordinate')
     parser.add_argument('y', type=float, nargs='?', default=0.0, help='Target Y coordinate')
     parser.add_argument('--yaw', type=float, help='Yaw angle in degrees (optional)')
-    parser.add_argument('--via_track', action='store_true', help='Enable via_track mode')
+    parser.add_argument('--nav_mode', default='FREE',choices=['FREE','TRACK','HYBRID'], help='Determine navigation mode')
     parser.add_argument('--user_id', type=str, default='test', help='User ID string')
     parser.add_argument('--speed_ratio', type=float, default=1.0, help='Speed ratio (0.0~1.0)')
 
     parsed_args, _ = parser.parse_known_args(sys.argv[1:])
 
     align_yaw = parsed_args.yaw is not None
-    via_track = parsed_args.via_track
+    nav_mode = parsed_args.nav_mode
 
     rclpy.init(args=args)
     action_client = GuidanceActionClient(
         align_yaw=align_yaw,
-        via_track=via_track,
+        nav_mode=nav_mode,
         user_id=parsed_args.user_id,
         speed_ratio=parsed_args.speed_ratio
     )

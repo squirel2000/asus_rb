@@ -53,7 +53,8 @@ class NavigateActionServer(BaseNavigationNode):
         target_pose = goal_handle.request.target_pose
         speed_ratio = goal_handle.request.speed_ratio
         align_yaw = goal_handle.request.align_yaw
-        via_track = goal_handle.request.via_track
+        nav_mode = goal_handle.request.nav_mode
+
         feedback_msg = Navigate.Feedback()
         result = Navigate.Result()
 
@@ -63,7 +64,7 @@ class NavigateActionServer(BaseNavigationNode):
         await self.set_max_speed(self.max_moving_speed, self.max_angular_speed)
         
         # Create a navigation action via publisher
-        self.publish_move_to(target_pose, speed_ratio, align_yaw, via_track)
+        self.publish_move_to(target_pose, speed_ratio, align_yaw, nav_mode)
 
         _waiting_timeout = self.stuck_timeout_sec / 2
         _last_move_time = self.get_clock().now()
@@ -83,14 +84,14 @@ class NavigateActionServer(BaseNavigationNode):
                 timeout_message = f"Failed to dismiss the AMR device error warning within {_waiting_timeout} seconds."
                 result.message = "Goal aborted due to a device error on the AMR."
                 # trying to publish again
-                self.publish_move_to(target_pose, speed_ratio, align_yaw, via_track)
+                self.publish_move_to(target_pose, speed_ratio, align_yaw, nav_mode)
 
             elif not self.remaining_targets:
                 self.get_logger().warn('Waiting for the AMR remaining target points.')
                 timeout_message = f"Waiting for the AMR remaining target points for {_waiting_timeout} seconds."
                 result.message = "Goal aborted because no valid target points exist."
                 # trying to publish again
-                self.publish_move_to(target_pose, speed_ratio, align_yaw, via_track)
+                self.publish_move_to(target_pose, speed_ratio, align_yaw, nav_mode)
             else:
                 if self.is_gohome:
                     target_pose.pose.position.x = self.remaining_targets[0][0]

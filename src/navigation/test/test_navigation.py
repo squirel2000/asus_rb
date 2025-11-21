@@ -48,11 +48,11 @@ def create_pose_stamped(node: Node, x, y, yaw_deg=None, go_home=False):
 
 class NavigateActionClient(Node):
     """Action client to test the navigation action server."""
-    def __init__(self, align_yaw=False, via_track=False):
+    def __init__(self, align_yaw=False, nav_mode=''):
         super().__init__('navigate_action_client')
         self._action_client = ActionClient(self, Navigate, 'navigate_to_pose')
         self._align_yaw = align_yaw
-        self._via_track = via_track
+        self._nav_mode = nav_mode
         
         self._goal_handle = None
         self._cancel_requested = False
@@ -61,10 +61,10 @@ class NavigateActionClient(Node):
         goal_msg = Navigate.Goal()
         goal_msg.target_pose = pose
         goal_msg.align_yaw = self._align_yaw
-        goal_msg.via_track = self._via_track
+        goal_msg.nav_mode = self._nav_mode
 
         self.get_logger().info(
-            f'Sending goal (align_yaw={self._align_yaw}, via_track={self._via_track})...'
+            f'Sending goal (align_yaw={self._align_yaw}, nav_mode={self._nav_mode})...'
         )
 
         self.get_logger().info('Waiting for action server...')
@@ -133,15 +133,15 @@ def main(args=None):
     parser.add_argument('y', type=float, nargs='?', default=0.0, help='Target Y coordinate')
     parser.add_argument('--yaw', type=float, help='Yaw angle in degrees (optional)')
     parser.add_argument('--go_home', action='store_true', help='Set z=99.99 to indicate go_home mode')
-    parser.add_argument('--via_track', action='store_true', help='Enable via_track mode')
+    parser.add_argument('--nav_mode', default='FREE',choices=['FREE','TRACK','HYBRID'], help='Determine navigation mode')
 
     parsed_args, _ = parser.parse_known_args(sys.argv[1:])
 
     align_yaw = parsed_args.yaw is not None
-    via_track = parsed_args.via_track
+    nav_mode = parsed_args.nav_mode
 
     rclpy.init(args=args)
-    action_client = NavigateActionClient(align_yaw=align_yaw, via_track=via_track)
+    action_client = NavigateActionClient(align_yaw=align_yaw, nav_mode=nav_mode)
 
     # --- Ctrl+C handler ---
     def signal_handler(sig, frame):
