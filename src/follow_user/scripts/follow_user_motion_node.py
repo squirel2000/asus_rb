@@ -21,6 +21,7 @@ from copy import deepcopy
 # Constants
 FOLLOW_USER_OFFSET = 0.25 # Move the target point closer to avoid path not found issues
 STATIC_NECK_ANGLE = 0.0
+STATIC_NECK_PITCH_DEG = 20.0  # Fixed neck pitch angle to face horizontally
 
 class FollowUserMotionNode(Node):
     """
@@ -70,6 +71,8 @@ class FollowUserMotionNode(Node):
             self.head_controller.start_listening()
             # Use get_firmware_version to activate the automatic update for the neck angles
             self.head_controller.get_firmware_version(timeout=3)
+            # Set neck to default pose
+            self.head_controller.control_head(yaw_deg=STATIC_NECK_ANGLE,pitch_deg=STATIC_NECK_PITCH_DEG)
 
         # State
         self._active_goal_handle = None
@@ -324,6 +327,19 @@ class FollowUserMotionNode(Node):
             # Send velocity command to head
             self.head_controller.control_head_velocity(yaw_vel_dps, pitch_vel_dps)
 
+    def _reset_robot_status(self):
+        self._active_goal_handle = None
+        self.human_absolute_pose = None
+        self.robot_pose = None
+        self.path_msg = None
+        self.follow_state = ""
+        self.cmd_vel_publisher.publish(Twist())
+        self.path_publisher.publish(Path())
+
+        if self.control_head and self.head_controller:
+            # Set neck to default pose
+            self.head_controller.control_head(yaw_deg=STATIC_NECK_ANGLE,pitch_deg=STATIC_NECK_PITCH_DEG)
+
     # ---------- ActionServer callbacks ----------
     def goal_callback(self, goal_request):
         """Accept or reject a client request to begin an action."""
@@ -369,13 +385,10 @@ class FollowUserMotionNode(Node):
                 # Check for cancel request
                 if goal_handle.is_cancel_requested:
                     goal_handle.canceled()
-                    self._active_goal_handle = None
+                    
+                    # Stop the robot and reset
+                    self._reset_robot_status()
                     self.get_logger().info('Goal canceled by the client.')
-
-                    # Stop the robot and clear the path
-                    self.human_absolute_pose = None
-                    self.cmd_vel_publisher.publish(Twist())
-                    self.path_publisher.publish(Path())
 
                     return FollowUser.Result(message='Goal canceled by the client.')
 
@@ -392,10 +405,8 @@ class FollowUserMotionNode(Node):
         finally:
             # ensure robot stopped on any exit path
             try:
-                self._active_goal_handle = None
-                self.human_absolute_pose = None
-                self.cmd_vel_publisher.publish(Twist())
-                self.path_publisher.publish(Path())
+                # Stop the robot and reset
+                self._reset_robot_status()
             except Exception:
                 pass
 
