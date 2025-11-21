@@ -157,7 +157,7 @@ class FollowUserMotionNode(Node):
             local_goal.pose.orientation = self.human_absolute_pose.pose.orientation
 
             # compute velocity using DWA planner
-            cmd_vel = self.dwa_planner.compute_velocity_commands(self.robot_pose, self.current_velocity, self.latest_scan, local_goal)
+            cmd_vel = self.dwa_planner.compute_velocity_commands(self.robot_pose, self.current_velocity, self.latest_scan, local_goal, human_pose=self.human_absolute_pose, human_radius=0.25)
             self.cmd_vel_publisher.publish(cmd_vel)
             self.get_logger().info(f"CmdVel -> Lin: {cmd_vel.linear.x:.2f}, Ang: {cmd_vel.angular.z:.2f}")
 

@@ -27,9 +27,10 @@ class DWAPlanner:
         self.max_ang_acc = node.get_parameter("max_angular_acceleration").get_parameter_value().double_value
 
         # scoring weights
-        self.weight_goal = 1.0
-        self.weight_clearance = 1.2
-        self.weight_velocity = 0.1
+        self.weight_goal = 1.2
+        self.weight_clearance = 1.5
+        self.weight_velocity = 0.2
+        self.weight_heading = 0.8
 
         # robot footprint radius (safety)
         self.robot_radius = 0.35
@@ -85,40 +86,39 @@ class DWAPlanner:
             traj[i, :] = [x, y, yaw]
         return traj
 
-    def _clearance_cost(self, traj, obstacles):
+    def _get_min_clearance(self, traj, obstacles):
         """
         Compute min clearance from trajectory to obstacles (both in map frame).
-        Return a clearance score (larger is better).
+        Returns the minimum distance found.
         """
         if obstacles.size == 0:
-            return 1.0  # no obstacles: excellent clearance
+            return float('inf')  # no obstacles: infinite clearance
 
         min_d = float('inf')
         for (x, y, _) in traj:
-            # compute distances to all obstacles, but break early if very close
             dists = np.hypot(obstacles[:,0] - x, obstacles[:,1] - y)
-            dmin = dists.min() if dists.size>0 else float('inf')
+            dmin = np.min(dists) if dists.size > 0 else float('inf')
             if dmin < min_d:
                 min_d = dmin
-            if min_d <= 0.0:
-                return 0.0
-            if min_d < self.robot_radius + self.min_allowed_clearance:
-                # immediate reject
-                return 0.0
-        # normalize clearance into (0,1]
-        return min(1.0, max(0.0, (min_d - self.robot_radius) / 2.0))
+        return min_d
 
-    def _goal_cost(self, traj, goal):
+    def _goal_metrics(self, traj, goal):
         """
-        cost based on final pose distance to goal (smaller cost for closer).
+        Calculates distance and heading error from the trajectory's end-point to the goal.
         """
-        last = traj[-1]
-        dx = goal.pose.position.x - last[0]
-        dy = goal.pose.position.y - last[1]
-        dist = math.hypot(dx, dy)
-        return dist
+        last_x, last_y, last_yaw = traj[-1]
+        goal_x, goal_y = goal.pose.position.x, goal.pose.position.y
 
-    def compute_velocity_commands(self, robot_pose, current_velocity: Twist, scan, local_goal: PoseStamped):
+        # distance cost
+        dist_err = math.hypot(goal_x - last_x, goal_y - last_y)
+
+        # heading cost
+        angle_to_goal = math.atan2(goal_y - last_y, goal_x - last_x)
+        heading_err = self._angle_diff(angle_to_goal, last_yaw)
+
+        return dist_err, heading_err
+
+    def compute_velocity_commands(self, robot_pose, current_velocity: Twist, scan, local_goal: PoseStamped, human_pose: PoseStamped = None, human_radius: float = 0.25):
         """
         Main planning function. Returns a Twist with the chosen (v,w).
         The logic is as follows:
@@ -168,33 +168,66 @@ class DWAPlanner:
         # Build obstacle points in map frame
         obstacles = self._scan_to_points_global(scan, robot_pose)
 
-        # current velocities from Twist
-        v0 = getattr(current_velocity, 'linear', None).x if current_velocity is not None else 0.0
-        w0 = getattr(current_velocity, 'angular', None).z if current_velocity is not None else 0.0
+        if human_pose is not None and obstacles.size > 0:
+            hx, hy = human_pose.pose.position.x, human_pose.pose.position.y
+            rx, ry = robot_pose.pose.position.x, robot_pose.pose.position.y
+            dist_h = math.hypot(hx - rx, hy - ry)
+            angle_h_map = math.atan2(hy - ry, hx - rx)
+            
+            # Obstacle vectors relative to robot are not needed; do calcs in map frame
+            obs_angles_map = np.arctan2(obstacles[:, 1] - ry, obstacles[:, 0] - rx)
+            obs_dists_map = np.hypot(obstacles[:, 0] - rx, obstacles[:, 1] - ry)
+            
+            ang_diff = np.abs((obs_angles_map - angle_h_map + np.pi) % (2 * np.pi) - np.pi)
+            
+            margin = 0.1
+            ang_thresh = math.atan2(human_radius + margin, max(dist_h, 1e-6))
+            ang_thresh = max(ang_thresh, math.radians(15.0))
+            # ang_thresh = math.radians(20.0) # Fixed wider angle to ensure robust filtering
+            dist_window = human_radius + margin
+            
+            human_mask = (ang_diff <= ang_thresh) & (np.abs(obs_dists_map - dist_h) <= dist_window)
+            obstacles = obstacles[~human_mask]
 
-        # dynamic window: feasible v,w ranges respecting acceleration limits
+        v0 = current_velocity.linear.x
+        w0 = current_velocity.angular.z
+
         v_min = max(0.0, v0 - self.max_acc * self.dt)
         v_max = min(self.max_v, v0 + self.max_acc * self.dt)
         w_min = max(-self.max_w, w0 - self.max_ang_acc * self.dt)
         w_max = min(self.max_w, w0 + self.max_ang_acc * self.dt)
 
-        # sample velocities
         v_samples = np.linspace(v_min, v_max, self.v_samples)
         w_samples = np.linspace(w_min, w_max, self.w_samples)
 
         best_score = -float('inf')
         best_v, best_w = 0.0, 0.0
 
+        max_possible_clearance = 3.0 * self.robot_radius # Normalize clearance against this value
+
         for v in v_samples:
             for w in w_samples:
                 traj = self._simulate_trajectory(v, w, robot_pose.pose.position.x, robot_pose.pose.position.y, robot_yaw)
-                clearance_score = self._clearance_cost(traj, obstacles)
-                if clearance_score <= 0.0:
-                    continue  # collision or too close
+                
+                min_clearance = self._get_min_clearance(traj, obstacles)
+                if min_clearance < self.robot_radius:
+                    continue # Collision path
 
-                g_cost = self._goal_cost(traj, local_goal)
-                # score: higher is better -> invert g_cost
-                score = (-self.weight_goal * g_cost) + (self.weight_clearance * clearance_score) + (self.weight_velocity * v)
+                goal_dist, heading_err = self._goal_metrics(traj, local_goal)
+
+                # --- Normalization of scores to [0, 1] range ---
+                clearance_score = min(1.0, min_clearance / max_possible_clearance)
+                # Sigmoid-like function for goal distance, falls off as distance increases
+                goal_dist_score = 1.0 / (1.0 + 2.0 * goal_dist)
+                heading_score = (math.pi - abs(heading_err)) / math.pi
+                velocity_score = v / self.max_v if self.max_v > 0 else 0.0
+
+                # --- Final weighted score ---
+                score = (self.weight_goal * goal_dist_score) + \
+                        (self.weight_clearance * clearance_score) + \
+                        (self.weight_heading * heading_score) + \
+                        (self.weight_velocity * velocity_score)
+
                 if score > best_score:
                     best_score = score
                     best_v, best_w = v, w
