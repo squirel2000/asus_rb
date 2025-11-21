@@ -2,8 +2,6 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
-from rclpy.executors import MultiThreadedExecutor
-from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.task import Future
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Path, Odometry
@@ -35,9 +33,6 @@ class FollowUserMotionNode(Node):
         self.robot_ip = robot_ip
         self.control_head = control_head
 
-        # Use a reentrant callback group to allow for nested service calls and callbacks
-        self.callback_group = ReentrantCallbackGroup()
-
         # Action Server
         self._action_server = ActionServer(
             self,
@@ -47,18 +42,17 @@ class FollowUserMotionNode(Node):
             goal_callback=self.goal_callback,
             handle_accepted_callback=self.handle_accepted_callback,
             cancel_callback=self.cancel_callback,
-            callback_group=self.callback_group,
             )
 
         # Subscribers
-        self.robot_pose_sub = self.create_subscription(PoseStamped, '/robot_pose', self.robot_pose_callback, 10, callback_group=self.callback_group)
-        self.human_relative_pose_sub = self.create_subscription(PoseStamped, '/human_relative_pose_front', self.human_relative_pose_front_callback, 10, callback_group=self.callback_group)
-        self.odom_sub = self.create_subscription(Odometry, '/slamware_ros_sdk_server_node/odom', self.odom_callback, 10, callback_group=self.callback_group)
+        self.robot_pose_sub = self.create_subscription(PoseStamped, '/robot_pose', self.robot_pose_callback, 10)
+        self.human_relative_pose_sub = self.create_subscription(PoseStamped, '/human_relative_pose_front', self.human_relative_pose_front_callback, 10)
+        self.odom_sub = self.create_subscription(Odometry, '/slamware_ros_sdk_server_node/odom', self.odom_callback, 10)
                 
         # Publishers
-        self.cmd_vel_publisher = self.create_publisher(Twist, '/cmd_vel', 10, callback_group=self.callback_group)
-        self.path_publisher = self.create_publisher(Path, '/follow_user/planned_path', 10, callback_group=self.callback_group)
-        self.human_absolute_pose_publisher = self.create_publisher(PoseStamped, '/follow_user/human_absolute_pose', 10, callback_group=self.callback_group)
+        self.cmd_vel_publisher = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.path_publisher = self.create_publisher(Path, '/follow_user/planned_path', 10)
+        self.human_absolute_pose_publisher = self.create_publisher(PoseStamped, '/follow_user/human_absolute_pose', 10)
 
         # TF
         self.tf_buffer = tf2_ros.Buffer()
@@ -423,14 +417,12 @@ def main(args=None):
     args, _ = parser.parse_known_args()
     
     node = FollowUserMotionNode(robot_ip=args.robot_ip, control_head=not args.no_head_control)
-    executor = MultiThreadedExecutor()
-    executor.add_node(node)
+
     try:
-        executor.spin()
+        rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
-        executor.shutdown()
         node.destroy_node()
         rclpy.shutdown()
 
