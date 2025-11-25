@@ -11,11 +11,11 @@ guidance_motion_node:
   ros__parameters:
     success_distance_threshold: 0.1
     success_yaw_threshold: 0.1
-    stuck_timeout_sec: 20.0
+    stuck_timeout_sec: 30.0
     stuck_distance_threshold: 0.05
-    normal_distance_min: 0.4
-    normal_distance_max: 1.0
-    lost_distance_threshold: 1.5
+    normal_distance_min: 0.0
+    normal_distance_max: 0.8
+    lost_distance_threshold: 0.8
     lost_timeout_sec: 60.0
     max_moving_speed: 0.4
     max_angular_speed: 1.2
