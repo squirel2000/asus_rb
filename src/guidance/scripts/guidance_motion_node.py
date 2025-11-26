@@ -101,45 +101,42 @@ class GuidanceActionServer(BaseNavigationNode):
         # Speed adjustment logic
         status = "USER_FOLLOWING"
         if human_distance < self.normal_distance_min:
-            pass
-            # # Human too close, accelerate
-            # self.current_max_moving_speed = self.max_moving_speed * 1.2
-            # self.current_max_angular_speed = self.max_angular_speed
-            # status = "USER_TOO_CLOSE"
-            # self._is_human_lost = False
-            # self._human_lost_start_time = None
-            # self.get_logger().info(f"USER_TOO_CLOSE ---> Distance:{human_distance:.2f}, Adjust speed to - linear:{self.current_max_moving_speed:.2f}, angular:{self.current_max_angular_speed:.2f}")
+            # Human too close, accelerate
+            self.current_max_moving_speed = self.max_moving_speed * 1.2
+            self.current_max_angular_speed = self.max_angular_speed
+            status = "USER_TOO_CLOSE"
+            self._is_human_lost = False
+            self._human_lost_start_time = None
+            self.get_logger().info(f"USER_TOO_CLOSE ---> Distance:{human_distance:.2f}, Adjust speed to - linear:{self.current_max_moving_speed:.2f}, angular:{self.current_max_angular_speed:.2f}")
         elif human_distance > self.normal_distance_max:
 
             if human_distance > self.lost_distance_threshold:
                 status = "USER_NOT_FOUND"
                 self.get_logger().warn(f"USER_NOT_FOUND ---> Distance:{human_distance:.2f}")
 
-                pass
-                # if not self._is_human_lost:
-                #     self._is_human_lost = True
-                #     self._human_lost_start_time = current_time
-                # elif (current_time - self._human_lost_start_time).nanoseconds / 1e9 > self.lost_timeout_sec:
-                #     self.get_logger().error(f"Human lost for {self.lost_timeout_sec} seconds, aborting action")
-                #     status = "ABORTING"
-                #     return status
-                # else:
-                #     # smooth deceleration
-                #     self.current_max_moving_speed *= 0.7
-                #     self.current_max_angular_speed = max(0.5, self.current_max_angular_speed*0.7)
+                if not self._is_human_lost:
+                    self._is_human_lost = True
+                    self._human_lost_start_time = current_time
+                elif (current_time - self._human_lost_start_time).nanoseconds / 1e9 > self.lost_timeout_sec:
+                    self.get_logger().error(f"Human lost for {self.lost_timeout_sec} seconds, aborting action")
+                    status = "ABORTING"
+                    return status
+                else:
+                    # smooth deceleration
+                    self.current_max_moving_speed *= 0.7
+                    self.current_max_angular_speed = max(0.5, self.current_max_angular_speed*0.7)
 
                 self.get_logger().warn(f"USER_NOT_FOUND ---> Distance:{human_distance:.2f}, Adjust speed to - linear:{self.current_max_moving_speed:.2f}, angular:{self.current_max_angular_speed:.2f}")
             else:
-                pass
-                # # Human lagging, smooth deceleration
-                # k_v = (self.max_moving_speed - 0.05) / (self.lost_distance_threshold - self.normal_distance_max)
-                # k_w = (self.max_angular_speed - 0.2) / (self.lost_distance_threshold - self.normal_distance_max)
-                # self.current_max_moving_speed = self.max_moving_speed - k_v * (human_distance - self.normal_distance_max)
-                # self.current_max_angular_speed = self.max_angular_speed - k_w * (human_distance - self.normal_distance_max)
-                # status = "USER_LAGGING_BEHIND"
-                # self._is_human_lost = False
-                # self._human_lost_start_time = None
-                # self.get_logger().info(f"USER_LAGGING_BEHIND ---> Distance:{human_distance:.2f}, Adjust speed to - linear:{self.current_max_moving_speed:.2f}, angular:{self.current_max_angular_speed:.2f}")
+                # Human lagging, smooth deceleration
+                k_v = (self.max_moving_speed - 0.05) / (self.lost_distance_threshold - self.normal_distance_max)
+                k_w = (self.max_angular_speed - 0.2) / (self.lost_distance_threshold - self.normal_distance_max)
+                self.current_max_moving_speed = self.max_moving_speed - k_v * (human_distance - self.normal_distance_max)
+                self.current_max_angular_speed = self.max_angular_speed - k_w * (human_distance - self.normal_distance_max)
+                status = "USER_LAGGING_BEHIND"
+                self._is_human_lost = False
+                self._human_lost_start_time = None
+                self.get_logger().info(f"USER_LAGGING_BEHIND ---> Distance:{human_distance:.2f}, Adjust speed to - linear:{self.current_max_moving_speed:.2f}, angular:{self.current_max_angular_speed:.2f}")
         else:
             # Normal following
             self.current_max_moving_speed = self.max_moving_speed
