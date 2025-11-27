@@ -7,6 +7,7 @@ from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Path, Odometry
 import argparse
 import math
+import time
 import numpy as np
 import tf2_ros
 from utils.head_control import HeadController
@@ -61,12 +62,7 @@ class FollowUserMotionNode(Node):
         # Head Control
         self.head_controller = None
         if self.control_head:
-            self.head_controller = HeadController(self.get_logger())
-            self.head_controller.start_listening()
-            # Use get_firmware_version to activate the automatic update for the neck angles
-            self.head_controller.get_firmware_version(timeout=3)
-            # Set neck to default pose
-            self.head_controller.control_head(yaw_deg=STATIC_NECK_ANGLE,pitch_deg=STATIC_NECK_PITCH_DEG)
+            self._init_head_controller()
 
         # State
         self._active_goal_handle = None
@@ -115,6 +111,51 @@ class FollowUserMotionNode(Node):
             f"lagging_dist_thres={self.lagging_dist_thres:.2f}, "
             f"lost_user_timeout={self.lost_user_timeout:.2f}, "
         )
+
+    def _init_head_controller(self, max_retries=5, retry_delay=0.5):
+        """
+        Initializes or re-initializes the head controller with a retry mechanism.
+        """
+        self.get_logger().info("Initializing head controller...")
+        if self.head_controller:
+            self.head_controller.destroy()
+            self.head_controller = None
+
+        for attempt in range(max_retries):
+            self.get_logger().info(f"Head controller initialization attempt {attempt + 1}/{max_retries}...")
+            try:
+                # Create a new instance
+                self.head_controller = HeadController(self.get_logger())
+                
+                if not self.head_controller.serial_port or not self.head_controller.serial_port.is_open:
+                    raise ConnectionError("Serial port could not be opened.")
+
+                self.head_controller.start_listening()
+                
+                if not self.head_controller._running:
+                     raise ConnectionError("Head controller listener thread failed to start.")
+
+                version_info = self.head_controller.get_firmware_version(timeout=2)
+                if "error" in version_info:
+                    raise ConnectionError(f"Failed to get firmware version: {version_info['error']}")
+
+                self.head_controller.control_head(yaw_deg=STATIC_NECK_ANGLE, pitch_deg=STATIC_NECK_PITCH_DEG)
+                self.get_logger().info("Head controller initialized successfully.")
+                return True
+
+            except Exception as e:
+                self.get_logger().error(f"Attempt {attempt + 1} failed: {e}")
+                if self.head_controller:
+                    self.head_controller.destroy()
+                self.head_controller = None
+
+                if attempt < max_retries - 1:
+                    self.get_logger().info(f"Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                else:
+                    self.get_logger().error("Max retries reached. Failed to initialize head controller.")
+                    return False
+        return False
 
     async def ros_async_sleep(self, seconds: float):
         """A ROS-compatible asynchronous sleep function that uses a one-shot timer."""
@@ -358,7 +399,19 @@ class FollowUserMotionNode(Node):
         self.get_logger().info(f'Executing goal for user: {goal_handle.request.user_id}')
         try:
             while rclpy.ok() and goal_handle.is_active:
-                
+                if self.control_head:
+                    # Check if head controller is still alive, if not, re-initialize
+                    is_connected = False
+                    if self.head_controller:
+                        # A quick check; get_firmware_version also handles listener thread status
+                        version_info = self.head_controller.get_firmware_version(timeout=1)
+                        if "error" not in version_info:
+                            is_connected = True
+
+                    if not is_connected:
+                        self.get_logger().warn("Head controller connection lost or not initialized. Attempting to (re)initialize...")
+                        self._init_head_controller()
+
                 feedback_msg = FollowUser.Feedback()
                 # Quick checks
                 _robot_updated = (self.robot_last_update_time and
