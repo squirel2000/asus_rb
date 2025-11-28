@@ -173,6 +173,10 @@ class FollowUserMotionNode(Node):
         """
         processed_pose = deepcopy(msg)
 
+        # If no active goal, nothing to do
+        if not getattr(self._active_goal_handle, 'is_active', False):
+            return        
+        
         # 3D distance from camera origin to the detected human point
         x, y, z = msg.pose.position.x, msg.pose.position.y, msg.pose.position.z
         dist = math.sqrt(x * x + y * y + z * z)
