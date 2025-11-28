@@ -76,6 +76,7 @@ class FollowUserMotionNode(Node):
         self.robot_last_update_time = None
         self.current_user_distance = None
         self.follow_state = ""
+        self.idle_loop_counter = 0
 
         # Parameters for pure pursuit
         self.declare_parameter("min_lookahead_dist", 0.5)
@@ -157,6 +158,31 @@ class FollowUserMotionNode(Node):
                     return False
         return False
 
+    def _safe_control_head(self, yaw_deg, pitch_deg):
+        """
+        Safely sends a head control command, ensuring the controller is connected.
+        If disconnected, it attempts to re-initialize before sending.
+        """
+        if not self.control_head:
+            return
+
+        is_connected = False
+        if self.head_controller:
+            version_info = self.head_controller.get_firmware_version(timeout=1)
+            if "error" not in version_info:
+                is_connected = True
+
+        if not is_connected:
+            self.get_logger().warn("Head controller connection lost. Attempting to re-establish before sending command...")
+            if not self._init_head_controller():
+                self.get_logger().error("Failed to re-establish head controller connection. Command not sent.")
+                return
+
+        if self.head_controller:
+            self.head_controller.control_head(yaw_deg=yaw_deg, pitch_deg=pitch_deg)
+        else:
+            self.get_logger().error("Cannot send head control command, controller is not available after re-initialization attempt.")
+
     async def ros_async_sleep(self, seconds: float):
         """A ROS-compatible asynchronous sleep function that uses a one-shot timer."""
         future = Future()
@@ -173,9 +199,17 @@ class FollowUserMotionNode(Node):
         self.robot_pose = msg  
         self.robot_last_update_time = self.get_clock().now()
 
-        # If no active goal, nothing to do
+        # If no active goal, handle idle behavior
         if not getattr(self._active_goal_handle, 'is_active', False):
+            self.idle_loop_counter += 1
+            # Periodically re-center the head when idle
+            if self.control_head and (self.idle_loop_counter % 15 == 0):
+                # self.get_logger().info("Periodically re-centering head while idle.")
+                self._safe_control_head(yaw_deg=STATIC_NECK_ANGLE, pitch_deg=STATIC_NECK_PITCH_DEG)
             return        
+        
+        # If goal is active, reset idle counter and proceed with active logic
+        self.idle_loop_counter = 0
         
         # Determine status
         _human_updated = (self.human_last_update_time is not None and
@@ -370,9 +404,9 @@ class FollowUserMotionNode(Node):
         self.cmd_vel_publisher.publish(Twist())
         self.path_publisher.publish(Path())
 
-        if self.control_head and self.head_controller:
+        if self.control_head:
             # Set neck to default pose
-            self.head_controller.control_head(yaw_deg=STATIC_NECK_ANGLE,pitch_deg=STATIC_NECK_PITCH_DEG)
+            self._safe_control_head(yaw_deg=STATIC_NECK_ANGLE, pitch_deg=STATIC_NECK_PITCH_DEG)
 
     # ---------- ActionServer callbacks ----------
     def goal_callback(self, goal_request):
