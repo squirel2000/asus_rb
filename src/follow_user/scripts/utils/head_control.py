@@ -30,6 +30,22 @@ FEEDBACK_TAG_ERROR_CODE = 0xE0
 
 # Command ID for requesting extra information
 REQUEST_EXTRA_INFO_CMD = 0x09
+REQUEST_FEEDBACK_CMD = 0x08
+# Feedback Request Flags
+REQUEST_FLAG_MOTOR_CURRENT = (1 << 8)
+# Current Protection
+OCP_NECK_YAW_MASK   = (1 << 0)
+OCP_NECK_PITCH_MASK = (1 << 1)
+OLP_NECK_YAW_MASK   = (1 << 4)
+OLP_NECK_PITCH_MASK = (1 << 5)
+# Over Temperature
+TEMP_NECK_YAW_MASK   = (1 << 0)
+TEMP_NECK_PITCH_MASK = (1 << 1)
+# Neck Status
+NECK_YAW_FW_ERR_MASK   = (1 << 4)
+NECK_PITCH_FW_ERR_MASK = (1 << 5)
+NECK_YAW_HW_ERR_MASK   = (1 << 6)
+NECK_PITCH_HW_ERR_MASK = (1 << 7)
 
 def log(message):
     """Helper function to print messages with a timestamp."""
@@ -58,6 +74,15 @@ class HeadController:
         self._version_info_ready = threading.Event()
         self._last_version_response_raw = None # Store the raw packet for debugging
 
+        # Error states from Basic Sensor Data
+        self.error_states = {
+            'OCP_NECK_YAW': False, 'OCP_NECK_PITCH': False, 'OLP_NECK_YAW': False,
+            'OLP_NECK_PITCH': False, 'TEMP_NECK_YAW': False, 'TEMP_NECK_PITCH': False,
+            'NECK_YAW_FW_ERR': False, 'NECK_PITCH_FW_ERR': False,
+            'NECK_YAW_HW_ERR': False, 'NECK_PITCH_HW_ERR': False,
+        }
+        self.last_error_log_time = {} # Used to throttle error logging
+
         # Neck angle & velocity tracking
         self.current_neck_yaw_deg = 0.0
         self.current_neck_pitch_deg = 0.0
@@ -75,6 +100,10 @@ class HeadController:
 
         # For sampling time analysis
         self.dt_history = deque(maxlen=200) # Store last 200 dt values
+
+        # Motor current tracking
+        self.current_neck_yaw_ma = 0.0
+        self.current_neck_pitch_ma = 0.0
 
     def _log(self, msg, level='info'):
         if self.logger:
@@ -205,6 +234,14 @@ class HeadController:
         self.last_neck_yaw_deg = yaw_deg
         self.last_neck_pitch_deg = pitch_deg
 
+    def _log_error_throttle(self, error_key, message):
+        """Logs an error message for a given key, but not more than once every 10s."""
+        now = time.time()
+        last_log_time = self.last_error_log_time.get(error_key, 0)
+        if now - last_log_time > 10.0:
+            self._log(message, 'error')
+            self.last_error_log_time[error_key] = now
+
     # -------------------------------------------------------------
     # Parse incoming sensor packets
     # -------------------------------------------------------------
@@ -227,9 +264,70 @@ class HeadController:
                 value = main_payload[i + 2: i + 2 + block_len]
 
                 # ---------------------------------------------------------
+                # Basic Sensor Data - includes multiple status bytes
+                # ---------------------------------------------------------
+                if tag == FEEDBACK_TAG_BASIC_SENSOR_DATA and block_len >= 9:
+                    # Per protocol doc, data is:
+                    # timestamp (4), ir_drop (1), sonar (1), current (1), temp (1), neck (1), ...
+                    current_prot_byte = value[6]
+                    over_temp_byte = value[7]
+                    neck_status_byte = value[8]
+
+                    # Check and log Current Protection errors
+                    self.error_states['OCP_NECK_YAW'] = (current_prot_byte & OCP_NECK_YAW_MASK) != 0
+                    if self.error_states['OCP_NECK_YAW']:
+                        self._log_error_throttle('OCP_NECK_YAW', "MCU Error: Over Current Protection on Neck Yaw.")
+                    
+                    self.error_states['OCP_NECK_PITCH'] = (current_prot_byte & OCP_NECK_PITCH_MASK) != 0
+                    if self.error_states['OCP_NECK_PITCH']:
+                        self._log_error_throttle('OCP_NECK_PITCH', "MCU Error: Over Current Protection on Neck Pitch.")
+
+                    self.error_states['OLP_NECK_YAW'] = (current_prot_byte & OLP_NECK_YAW_MASK) != 0
+                    if self.error_states['OLP_NECK_YAW']:
+                        self._log_error_throttle('OLP_NECK_YAW', "MCU Error: Over Load Protection on Neck Yaw.")
+
+                    self.error_states['OLP_NECK_PITCH'] = (current_prot_byte & OLP_NECK_PITCH_MASK) != 0
+                    if self.error_states['OLP_NECK_PITCH']:
+                        self._log_error_throttle('OLP_NECK_PITCH', "MCU Error: Over Load Protection on Neck Pitch.")
+
+                    # Check and log Over Temperature errors
+                    self.error_states['TEMP_NECK_YAW'] = (over_temp_byte & TEMP_NECK_YAW_MASK) != 0
+                    if self.error_states['TEMP_NECK_YAW']:
+                        self._log_error_throttle('TEMP_NECK_YAW', "MCU Error: Over Temperature on Neck Yaw.")
+                    
+                    self.error_states['TEMP_NECK_PITCH'] = (over_temp_byte & TEMP_NECK_PITCH_MASK) != 0
+                    if self.error_states['TEMP_NECK_PITCH']:
+                        self._log_error_throttle('TEMP_NECK_PITCH', "MCU Error: Over Temperature on Neck Pitch.")
+
+                    # Check and log Neck Status errors
+                    self.error_states['NECK_YAW_FW_ERR'] = (neck_status_byte & NECK_YAW_FW_ERR_MASK) != 0
+                    if self.error_states['NECK_YAW_FW_ERR']:
+                        self._log_error_throttle('NECK_YAW_FW_ERR', "MCU Error: Neck Yaw Firmware Error.")
+
+                    self.error_states['NECK_PITCH_FW_ERR'] = (neck_status_byte & NECK_PITCH_FW_ERR_MASK) != 0
+                    if self.error_states['NECK_PITCH_FW_ERR']:
+                        self._log_error_throttle('NECK_PITCH_FW_ERR', "MCU Error: Neck Pitch Firmware Error.")
+
+                    self.error_states['NECK_YAW_HW_ERR'] = (neck_status_byte & NECK_YAW_HW_ERR_MASK) != 0
+                    if self.error_states['NECK_YAW_HW_ERR']:
+                        self._log_error_throttle('NECK_YAW_HW_ERR', "MCU Error: Neck Yaw Hardware Error.")
+
+                    self.error_states['NECK_PITCH_HW_ERR'] = (neck_status_byte & NECK_PITCH_HW_ERR_MASK) != 0
+                    if self.error_states['NECK_PITCH_HW_ERR']:
+                        self._log_error_throttle('NECK_PITCH_HW_ERR', "MCU Error: Neck Pitch Hardware Error.")
+
+                    # Decode motor current if available (bytes 9-12)
+                    if block_len >= 13:
+                        self.current_neck_yaw_ma = int.from_bytes(value[9:11], 'little', signed=True)
+                        self.current_neck_pitch_ma = int.from_bytes(value[11:13], 'little', signed=True)
+                        self._feedback_data["Motor Current"] = {
+                            "yaw_mA": self.current_neck_yaw_ma,
+                            "pitch_mA": self.current_neck_pitch_ma
+                        }
+                # ---------------------------------------------------------
                 # Neck Encoder — includes (yaw,pitch) in 0.1 deg units
                 # ---------------------------------------------------------
-                if tag == FEEDBACK_TAG_NECK_ENCODER and block_len == 4:
+                elif tag == FEEDBACK_TAG_NECK_ENCODER and block_len == 4:
                     yaw_raw = int.from_bytes(value[0:2], 'little', signed=True)
                     pitch_raw = int.from_bytes(value[2:4], 'little', signed=True)
 
@@ -369,7 +467,14 @@ class HeadController:
     # Firmware version query
     # -------------------------------------------------------------
     def _build_version_request(self, enable=True):
-        payload = bytearray([REQUEST_EXTRA_INFO_CMD, 0x01, 0x1F if enable else 0x00])
+        request_mask = 0x1F if enable else 0x00
+        payload = bytearray([REQUEST_EXTRA_INFO_CMD, 0x01, request_mask])
+        return self._build_packet(payload)
+
+    def build_feedback_request(self, flags):
+        """Builds a packet to request feedback data based on flags."""
+        payload = bytearray([REQUEST_FEEDBACK_CMD, 0x04]) # 4 bytes for the flags
+        payload += flags.to_bytes(4, 'little')
         return self._build_packet(payload)
 
     def get_all_feedback_data(self):
@@ -524,6 +629,28 @@ if __name__ == "__main__":
             log(f"  Min Rate: {stats['min_hz']:.2f} Hz, Max Rate: {stats['max_hz']:.2f} Hz, Std Dev: {stats['std_hz']:.2f} Hz")
         log("-" * 60)
         
+        log("\n--- Keeping head at neutral position for 300 seconds and monitoring current ---")
+        head_controller.control_head(0.0, 20.0, 1000, logging=True)
+        time.sleep(1.5)  # Wait for head to settle
+
+        start_time = time.time()
+        loop_counter = 0
+        while time.time() - start_time < 300:
+            # Request motor current every loop
+            current_request_cmd = head_controller.build_feedback_request(REQUEST_FLAG_MOTOR_CURRENT)
+            if head_controller.serial_port and head_controller.serial_port.is_open:
+                head_controller.serial_port.write(current_request_cmd)
+
+            if loop_counter % 5 == 0:  # Log every 5 seconds
+                log(f"  Time {int(time.time() - start_time)}s: "
+                    f"Yaw={head_controller.current_neck_yaw_deg:.1f} deg, "
+                    f"Pitch={head_controller.current_neck_pitch_deg:.1f} deg, "
+                    f"Yaw Current={head_controller.current_neck_yaw_ma} mA, "
+                    f"Pitch Current={head_controller.current_neck_pitch_ma} mA")
+
+            time.sleep(1)
+            loop_counter += 1
+
         head_controller.destroy()
 
     else:
