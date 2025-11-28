@@ -19,7 +19,7 @@ from copy import deepcopy
 # Constants
 FOLLOW_USER_OFFSET = 0.25 # Move the target point closer to avoid path not found issues
 STATIC_NECK_ANGLE = 0.0
-STATIC_NECK_PITCH_DEG = 20.0  # Fixed neck pitch angle to face horizontally
+STATIC_NECK_PITCH_DEG = 0.0  # Fixed neck pitch angle to face horizontally
 
 class FollowUserMotionNode(Node):
     """
