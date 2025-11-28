@@ -11,7 +11,7 @@ class HeadTracker:
         self.MAX_PITCH_VEL = math.radians(140) # From RobotSpec.java
         
         # Pitch control parameters
-        self.STATIC_NECK_PITCH_DEG = 15.0
+        self.STATIC_NECK_PITCH_DEG = 0.0
         self.PITCH_TOLERANCE_RAD = math.radians(3.0)
         self.PROFILE_PITCH_SCALE = math.radians(30.0)
         self.PROFILE_PITCH_GAIN = 1.0
