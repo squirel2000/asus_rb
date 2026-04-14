@@ -7,6 +7,7 @@ from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Path, Odometry
 import argparse
 import math
+import time
 import numpy as np
 import tf2_ros
 from utils.head_control import HeadController
@@ -81,6 +82,11 @@ class FollowUserMotionNode(Node):
         self.current_user_distance = None
         self.follow_state = ""
 
+        # Diagnostic: track control loop timing and timer accumulation
+        self._last_cmd_vel_time = None
+        self._last_odom_time = None
+        self._active_timer_count = 0  # Manual counter for timer leak detection
+
         # Parameters for pure pursuit
         self.declare_parameter("min_lookahead_dist", 0.5)
         self.declare_parameter("max_lookahead_dist", 1.5)
@@ -119,11 +125,22 @@ class FollowUserMotionNode(Node):
     async def ros_async_sleep(self, seconds: float):
         """A ROS-compatible asynchronous sleep function that uses a one-shot timer."""
         future = Future()
-        self.create_timer(seconds, lambda: future.set_result(None))
+        self._active_timer_count += 1
+        timer = self.create_timer(seconds, lambda: future.set_result(None))
         await future
+        timer.cancel()
+        self.destroy_timer(timer)
+        self._active_timer_count -= 1
 
     def odom_callback(self, msg):
         self.current_velocity = msg.twist.twist
+        # [DIAG-B] Log odom rate and velocity
+        now = self.get_clock().now()
+        if self._last_odom_time is not None:
+            dt_ms = (now - self._last_odom_time).nanoseconds / 1e6
+            if dt_ms > 100:  # Only log when odom rate drops below 10Hz
+                self.get_logger().warn(f"[DIAG-B] odom slow: dt={dt_ms:.0f}ms, odom_lin={msg.twist.twist.linear.x:.3f}, odom_ang={msg.twist.twist.angular.z:.3f}")
+        self._last_odom_time = now
 
     def robot_pose_callback(self, msg):
         """ 
@@ -157,7 +174,20 @@ class FollowUserMotionNode(Node):
             
             cmd_vel = self.pure_pursuit_controller.compute_velocity_commands(self.robot_pose, self.current_velocity)
             self.cmd_vel_publisher.publish(cmd_vel)
-            self.get_logger().info(f"Following path. Vel: {cmd_vel.linear.x:.2f}, Ang: {cmd_vel.angular.z:.2f}")
+
+            # [DIAG-A] Consolidated diagnostic: control loop rate + velocities + state
+            now = self.get_clock().now()
+            dt_ms = -1.0
+            if self._last_cmd_vel_time is not None:
+                dt_ms = (now - self._last_cmd_vel_time).nanoseconds / 1e6
+            self._last_cmd_vel_time = now
+            has_path = self.pure_pursuit_controller.path_ is not None and len(self.pure_pursuit_controller.path_.poses) > 0
+            self.get_logger().info(
+                f"[DIAG-A] dt={dt_ms:.0f}ms | "
+                f"cmd=({cmd_vel.linear.x:.3f}, {cmd_vel.angular.z:.3f}) | "
+                f"odom=({self.current_velocity.linear.x:.3f}, {self.current_velocity.angular.z:.3f}) | "
+                f"has_path={has_path} | state={self.follow_state}"
+            )
             # self.get_logger().info(f"Following path. Vel: {cmd_vel.linear.x:.2f}, Ang: {cmd_vel.angular.z:.2f}, human_abs: ({self.human_absolute_pose.pose.position.x:.2f}, {self.human_absolute_pose.pose.position.y:.2f}), last_path_point: ({self.pure_pursuit_controller.path_.poses[-1].pose.position.x:.2f}, {self.pure_pursuit_controller.path_.poses[-1].pose.position.y:.2f})")
             
             # Update head tracking
@@ -264,18 +294,27 @@ class FollowUserMotionNode(Node):
         try:
             target_x = human_absolute_pose.pose.position.x
             target_y = human_absolute_pose.pose.position.y
+
+            # [DIAG-C] Measure search_path HTTP call duration and result
+            t0 = time.monotonic()
             path_points = self.motion_utils.search_path(self.robot_ip, target_x, target_y)
+            t1 = time.monotonic()
+            search_ms = (t1 - t0) * 1000
 
             if path_points:
                 self.path_msg = self.motion_utils.convert_points_to_path(path_points, 'slamware_map')
                 self.pure_pursuit_controller.set_path(self.path_msg)
                 self.path_publisher.publish(self.path_msg)
-                self.get_logger().info(f"Update {len(self.path_msg.poses)}-point path with the last point: ({self.path_msg.poses[-1].pose.position.x:.2f}, {self.path_msg.poses[-1].pose.position.y:.2f})")
+                self.get_logger().info(
+                    f"[DIAG-C] search_path OK: {search_ms:.0f}ms, "
+                    f"{len(self.path_msg.poses)}-pts, "
+                    f"last=({self.path_msg.poses[-1].pose.position.x:.2f}, {self.path_msg.poses[-1].pose.position.y:.2f})")
             else:
                 self.pure_pursuit_controller.set_path(None)
+                self.get_logger().warn(f"[DIAG-C] search_path FAILED: {search_ms:.0f}ms, path set to None!")
 
         except Exception as e:
-            self.get_logger().error(f'Error in path update: {e}')
+            self.get_logger().error(f'[DIAG-C] search_path EXCEPTION: {e}')
             self.pure_pursuit_controller.set_path(None)
 
     def _update_head_tracking(self, robot_pose, human_absolute_pose):
@@ -326,6 +365,8 @@ class FollowUserMotionNode(Node):
             self.head_controller.control_head_velocity(yaw_vel_dps, pitch_vel_dps)
 
     def _reset_robot_status(self):
+        # [DIAG-D] Sentinel: this should ONLY fire on goal cancel/completion, never during following
+        self.get_logger().warn(f"[DIAG-D] _reset_robot_status() called! Publishing Twist(0,0). Previous state={self.follow_state}")
         self._active_goal_handle = None
         self.human_absolute_pose = None
         self.path_msg = None
@@ -391,6 +432,12 @@ class FollowUserMotionNode(Node):
 
                 feedback_msg.status = self.follow_state
                 goal_handle.publish_feedback(feedback_msg)
+
+                # [DIAG-E] Monitor timer accumulation (sampled every 0.1s)
+                # After the timer fix, _active_timer_count should always be 0 here.
+                # If it grows, the fix is not working.
+                if self._active_timer_count > 2:
+                    self.get_logger().warn(f"[DIAG-E] Active sleep timers: {self._active_timer_count} (expected 0 here, leak detected!)")
 
                 await self.ros_async_sleep(0.1)
 

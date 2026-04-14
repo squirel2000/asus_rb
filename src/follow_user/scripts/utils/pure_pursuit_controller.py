@@ -114,7 +114,12 @@ class PurePursuitController:
         cmd_vel = self._rectify_velocity(target_vel_lin_x, target_vel_ang_z, current_velocity)
         
         # Print debug info
-        self._node.get_logger().info(f"_pure_pursuit_control: lookahead_point({lookahead_point.x:.2f}, {lookahead_point.y:.2f}), Robot({robot_pose.pose.position.x:.2f}, {robot_pose.pose.position.y:.2f}, {math.degrees(self.get_yaw_from_quaternion(robot_pose.pose.orientation)):.2f} deg), Heading error: {math.degrees(heading_error):.2f} deg, target_vel({target_vel_lin_x:.2f}, {target_vel_ang_z:.2f}), cmd_vel({cmd_vel.linear.x:.2f}, {cmd_vel.angular.z:.2f})")
+        self._node.get_logger().info(
+            f"[DIAG-PP] dist_goal={dist_to_goal:.3f} {'FINAL' if dist_to_goal < FINAL_APPROACH_DIST else 'FAR'} | "
+            f"heading_err={math.degrees(heading_error):.1f}deg | "
+            f"target=({target_vel_lin_x:.3f}, {target_vel_ang_z:.3f}) | "
+            f"cmd=({cmd_vel.linear.x:.3f}, {cmd_vel.angular.z:.3f})"
+        )
         
         return cmd_vel
 
